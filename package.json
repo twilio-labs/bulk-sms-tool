@@ -14,8 +14,8 @@
     "@tailwindcss/vite": "^4.1.12",
     "lucide-react": "^0.540.0",
     "papaparse": "^5.5.3",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "react": "19.2.1",
+    "react-dom": "19.2.1",
     "twilio": "^5.8.0"
   },
   "devDependencies": {
