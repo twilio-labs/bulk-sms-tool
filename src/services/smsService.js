@@ -1,7 +1,7 @@
 import { API_ENDPOINTS } from '../utils/constants'
 
 /**
- * Sends bulk SMS messages
+ * Sends bulk messages (SMS or WhatsApp)
  * @param {Object} params - Bulk SMS parameters
  * @param {Array} params.contacts - Array of contacts
  * @param {string} params.message - Message content
@@ -10,7 +10,7 @@ import { API_ENDPOINTS } from '../utils/constants'
  * @param {number} params.messageDelay - Delay between messages in milliseconds
  * @returns {Promise<Object>} - API response
  */
-export const sendBulkSMS = async ({ contacts, message, twilioConfig, senderConfig, messageDelay = 1000 }) => {
+export const sendBulkSMS = async ({ contacts, message, contentTemplate = null, twilioConfig, senderConfig, channel = senderConfig?.channel || 'sms', messageDelay = 1000 }) => {
   const response = await fetch(API_ENDPOINTS.SEND_BULK_SMS, {
     method: 'POST',
     headers: {
@@ -19,8 +19,10 @@ export const sendBulkSMS = async ({ contacts, message, twilioConfig, senderConfi
     body: JSON.stringify({
       contacts,
       message,
+      contentTemplate,
       twilioConfig,
       senderConfig,
+      channel,
       messageDelay
     })
   })
@@ -34,7 +36,7 @@ export const sendBulkSMS = async ({ contacts, message, twilioConfig, senderConfi
 }
 
 /**
- * Schedules SMS messages for later delivery
+ * Schedules messages (SMS or WhatsApp) for later delivery
  * @param {Object} params - Scheduling parameters
  * @param {Array} params.contacts - Array of contacts
  * @param {string} params.message - Message content
@@ -44,7 +46,7 @@ export const sendBulkSMS = async ({ contacts, message, twilioConfig, senderConfi
  * @param {number} params.messageDelay - Delay between messages in milliseconds
  * @returns {Promise<Object>} - API response with job ID
  */
-export const scheduleSMS = async ({ contacts, message, twilioConfig, senderConfig, scheduledDateTime, messageDelay = 1000 }) => {
+export const scheduleSMS = async ({ contacts, message, contentTemplate = null, twilioConfig, senderConfig, channel = senderConfig?.channel || 'sms', scheduledDateTime, messageDelay = 1000 }) => {
   const response = await fetch(API_ENDPOINTS.SCHEDULE_SMS, {
     method: 'POST',
     headers: {
@@ -53,12 +55,67 @@ export const scheduleSMS = async ({ contacts, message, twilioConfig, senderConfi
     body: JSON.stringify({
       contacts,
       message,
+      contentTemplate,
       twilioConfig,
       senderConfig,
+      channel,
       scheduledDateTime,
       messageDelay
     })
   })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export const getContentTemplates = async ({ accountSid, authToken, includeUnapproved = false }) => {
+  const response = await fetch(API_ENDPOINTS.CONTENT_TEMPLATES, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      accountSid,
+      authToken,
+      includeUnapproved,
+    })
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export const getSmsPricing = async ({ accountSid, authToken, countryCode }) => {
+  const response = await fetch(API_ENDPOINTS.SMS_PRICING, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      accountSid,
+      authToken,
+      countryCode,
+    })
+  })
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
+  }
+
+  return response.json()
+}
+
+export const getWhatsAppRateCards = async () => {
+  const response = await fetch(API_ENDPOINTS.WHATSAPP_RATE_CARDS)
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}))

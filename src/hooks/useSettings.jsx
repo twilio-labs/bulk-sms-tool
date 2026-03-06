@@ -12,6 +12,7 @@ export const useSettings = () => {
 
   // Initialize sender configuration
   const [senderConfig, setSenderConfig] = useState({
+    channel: 'sms', // 'sms' or 'whatsapp'
     type: 'phone', // 'phone' or 'messaging-service'
     phoneNumber: '',
     messagingServiceSid: ''
@@ -58,6 +59,10 @@ export const useSettings = () => {
   }, [twilioConfig])
 
   const validateSenderConfig = useCallback(() => {
+    if (senderConfig.channel !== 'sms' && senderConfig.channel !== 'whatsapp') {
+      throw new Error('Please choose a valid channel (SMS or WhatsApp)')
+    }
+
     if (senderConfig.type === 'phone') {
       if (!senderConfig.phoneNumber) {
         throw new Error('Please enter a phone number')
@@ -94,6 +99,7 @@ export const useSettings = () => {
     })
 
     setSenderConfig({
+      channel: 'sms',
       type: 'phone',
       phoneNumber: '',
       messagingServiceSid: ''

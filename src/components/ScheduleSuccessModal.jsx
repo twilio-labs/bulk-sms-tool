@@ -9,6 +9,15 @@ const ScheduleSuccessModal = ({
 
   // Replace variables in message preview with first contact data
   const getPreviewMessage = () => {
+    if (scheduledMessage.contentTemplate?.contentSid) {
+      const templateName = scheduledMessage.contentTemplate?.friendlyName || scheduledMessage.contentTemplate?.contentSid
+      const variablePreview = Object.entries(scheduledMessage.contentTemplate?.variables || {})
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(', ')
+
+      return `Template: ${templateName}${variablePreview ? `\n${variablePreview}` : ''}`
+    }
+
     if (!scheduledMessage.message || !scheduledMessage.contacts?.length) {
       return scheduledMessage.message || ''
     }
@@ -47,7 +56,7 @@ const ScheduleSuccessModal = ({
                     Message Scheduled Successfully!
                   </h3>
                   <p className="text-sm text-green-700">
-                    Your SMS will be sent automatically
+                    Your {scheduledMessage.channel === 'whatsapp' ? 'WhatsApp message' : 'message'} will be sent automatically
                   </p>
                 </div>
               </div>
@@ -77,6 +86,14 @@ const ScheduleSuccessModal = ({
                 <div>
                   <span className="font-medium text-gray-900">Recipients:</span>
                   <div className="text-gray-700">{scheduledMessage.contactCount} contacts</div>
+                </div>
+              </div>
+
+              <div className="flex items-center text-sm text-gray-600">
+                <MessageSquare className="w-4 h-4 mr-3 text-green-500" />
+                <div>
+                  <span className="font-medium text-gray-900">Channel:</span>
+                  <div className="text-gray-700 capitalize">{scheduledMessage.channel || 'sms'}</div>
                 </div>
               </div>
 

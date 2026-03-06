@@ -106,7 +106,7 @@ export const useScheduler = () => {
     }, delayUntilScheduled)
   }, [])
 
-  const scheduleMessage = useCallback(async ({ contacts, message, twilioConfig, senderConfig, messageDelay = 1000 }) => {
+  const scheduleMessage = useCallback(async ({ contacts, message, contentTemplate = null, twilioConfig, senderConfig, messageDelay = 1000 }) => {
     const { scheduledDate, scheduledTime } = scheduledSending
 
     // Validation
@@ -127,8 +127,10 @@ export const useScheduler = () => {
       const result = await scheduleSMS({
         contacts,
         message,
+        contentTemplate,
         twilioConfig,
         senderConfig,
+        channel: senderConfig?.channel || 'sms',
         scheduledDateTime,
         messageDelay
       })
@@ -143,6 +145,8 @@ export const useScheduler = () => {
       setLastScheduledMessage({
         jobId: result.jobId,
         message: message,
+        contentTemplate,
+        channel: senderConfig?.channel || 'sms',
         contacts: contacts,
         scheduledDateTime: scheduledDateTime,
         scheduledFor: new Date(scheduledDateTime).toLocaleString(),
@@ -153,6 +157,8 @@ export const useScheduler = () => {
       // Add to scheduled jobs list
       const newJob = {
         id: result.jobId || `job_${Date.now()}`,
+        contentTemplate,
+        channel: senderConfig?.channel || 'sms',
         scheduledTime: scheduledDateTime,
         message,
         recipients: contacts,
@@ -166,7 +172,7 @@ export const useScheduler = () => {
 
       return result
     } catch (error) {
-      throw new Error(`Failed to schedule SMS: ${error.message}`)
+      throw new Error(`Failed to schedule messages: ${error.message}`)
     }
   }, [scheduledSending])
 
@@ -260,6 +266,8 @@ export const useScheduler = () => {
       if (data?.jobs) {
         setScheduledJobs(data.jobs.map(job => ({
           id: job.jobId,
+          channel: job.channel || 'sms',
+          contentTemplate: job.contentTemplate || null,
           scheduledTime: job.scheduledDateTime,
           contactCount: job.contactCount,
           status: job.status,

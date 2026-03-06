@@ -6,10 +6,16 @@ const SenderConfiguration = ({
   senderConfig, 
   updateSenderConfig 
 }) => {
+  const [channel, setChannel] = useState(senderConfig?.channel || 'sms')
   const [senderType, setSenderType] = useState(senderConfig?.type || 'phone')
   const [messagingServices, setMessagingServices] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  useEffect(() => {
+    setChannel(senderConfig?.channel || 'sms')
+    setSenderType(senderConfig?.type || 'phone')
+  }, [senderConfig?.channel, senderConfig?.type])
 
   // Fetch messaging services when credentials are available
   useEffect(() => {
@@ -51,15 +57,26 @@ const SenderConfiguration = ({
   const handleSenderTypeChange = (type) => {
     setSenderType(type)
     updateSenderConfig({ 
+      channel,
       type, 
       phoneNumber: type === 'phone' ? senderConfig?.phoneNumber || '' : null,
       messagingServiceSid: type === 'messaging-service' ? senderConfig?.messagingServiceSid || '' : null
     })
   }
 
+  const handleChannelChange = (nextChannel) => {
+    setChannel(nextChannel)
+    updateSenderConfig({
+      ...senderConfig,
+      channel: nextChannel,
+      type: senderType
+    })
+  }
+
   const handlePhoneNumberChange = (phoneNumber) => {
     updateSenderConfig({ 
       ...senderConfig,
+      channel,
       type: 'phone',
       phoneNumber,
       messagingServiceSid: null
@@ -69,6 +86,7 @@ const SenderConfiguration = ({
   const handleMessagingServiceChange = (messagingServiceSid) => {
     updateSenderConfig({ 
       ...senderConfig,
+      channel,
       type: 'messaging-service',
       messagingServiceSid,
       phoneNumber: null
@@ -80,10 +98,43 @@ const SenderConfiguration = ({
 
   return (
     <div className="space-y-6">
+      {/* Channel Selection */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-3">
+          Channel
+        </label>
+        <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg">
+          <button
+            type="button"
+            onClick={() => handleChannelChange('sms')}
+            className={`flex items-center px-4 py-2 rounded-md text-sm font-medium transition-colors flex-1 justify-center ${
+              channel === 'sms'
+                ? 'bg-white text-red-700 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4 mr-2" />
+            SMS
+          </button>
+          <button
+            type="button"
+            onClick={() => handleChannelChange('whatsapp')}
+            className={`flex items-center px-4 py-2 rounded-md text-sm font-medium transition-colors flex-1 justify-center ${
+              channel === 'whatsapp'
+                ? 'bg-white text-red-700 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4 mr-2" />
+            WhatsApp
+          </button>
+        </div>
+      </div>
+
       {/* Sender Type Toggle */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-3">
-          Sender Type
+          Sender Type ({channel === 'whatsapp' ? 'WhatsApp' : 'SMS'})
         </label>
         <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg">
           <button
@@ -130,11 +181,16 @@ const SenderConfiguration = ({
             type="text"
             value={senderConfig?.phoneNumber || ''}
             onChange={(e) => handlePhoneNumberChange(e.target.value)}
-            placeholder="Enter your Twilio phone number (e.g., +1234567890)"
+            placeholder={
+              channel === 'whatsapp'
+                ? 'Enter your WhatsApp-enabled Twilio number (e.g., +14155238886)'
+                : 'Enter your Twilio phone number (e.g., +1234567890)'
+            }
             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:shadow-lg transition-shadow"
           />
           <p className="text-xs text-gray-500 mt-2">
-            Must include country code (e.g., +1 for US, +57 for Colombia)
+            Must include country code in E.164 format (e.g., +1 for US, +57 for Colombia).
+            {channel === 'whatsapp' && ' The app will automatically send using the whatsapp: prefix.'}
           </p>
         </div>
       )}
@@ -215,11 +271,11 @@ const SenderConfiguration = ({
           Sender Configuration Options:
         </p>
         <ul className="text-sm text-blue-700 space-y-1 list-disc list-inside">
-          <li><strong>Phone Number:</strong> Send from a single Twilio phone number</li>
+          <li><strong>Phone Number:</strong> Send from a single Twilio number ({channel === 'whatsapp' ? 'WhatsApp-enabled required' : 'SMS-capable required'})</li>
           <li><strong>Messaging Service:</strong> Send from a pool of numbers with automatic failover and compliance features</li>
         </ul>
         <p className="text-xs text-blue-600 mt-3">
-          💡 <strong>Tip:</strong> Messaging Services provide better deliverability and can handle higher volumes.
+          💡 <strong>Tip:</strong> For WhatsApp, use a sender enabled in Twilio WhatsApp Sandbox or a production-approved WhatsApp sender.
         </p>
       </div>
     </div>
