@@ -83,8 +83,12 @@ const ScheduleSuccessModal = ({
               <div className="flex items-center text-sm text-gray-600">
                 <Clock className="w-4 h-4 mr-3 text-orange-500" />
                 <div>
-                  <span className="font-medium text-gray-900">Job ID:</span>
-                  <div className="text-gray-700 font-mono text-xs">{scheduledMessage.jobId}</div>
+                  <span className="font-medium text-gray-900">Scheduled Message IDs:</span>
+                  <div className="text-gray-700 font-mono text-xs break-all">
+                    {scheduledMessage.messageSids?.length
+                      ? scheduledMessage.messageSids.join(', ')
+                      : 'Available in Twilio Console logs'}
+                  </div>
                 </div>
               </div>
             </div>
@@ -111,7 +115,16 @@ const ScheduleSuccessModal = ({
                   <div className="font-medium text-blue-900">What happens next?</div>
                   <div className="text-blue-800 mt-1">
                     Your message will be sent automatically at the scheduled time. 
-                    You can monitor progress in the "Scheduled Messages" section below.
+                    You can review and cancel scheduled messages from the{' '}
+                    <a
+                      href="https://console.twilio.com/us1/monitor/insights/sms?frameUrl=%2Fconsole%2Fsms%2Finsights%2Fdelivery%3Fx-target-region%3Dus1&q=tabKey%3Dscheduled%26timeRangeFilterPreset%3DPAST_D_7"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline font-medium"
+                    >
+                      Twilio Console Scheduled Messages
+                    </a>
+                    .
                   </div>
                 </div>
               </div>

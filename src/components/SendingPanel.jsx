@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Send, Clock, Calendar, Users, DollarSign, AlertTriangle, CheckCircle } from 'lucide-react'
 import ScheduleSuccessModal from './ScheduleSuccessModal'
+import { getScheduledTimeValidationError, SCHEDULE_CONSTRAINTS } from '../utils/dateUtils'
 
 const SendingPanel = ({ 
   message, 
@@ -24,6 +25,11 @@ const SendingPanel = ({
   const [showSuccessModal, setShowSuccessModal] = useState(false)
 
   const estimatedCost = (contacts?.length || 0) * 0.0075 // Base cost estimation
+  const hasMessagingServiceConfigured = senderConfig?.type === 'messaging-service' && Boolean(senderConfig?.messagingServiceSid)
+  const scheduleWindowError = getScheduledTimeValidationError(
+    scheduledSending?.scheduledDate,
+    scheduledSending?.scheduledTime
+  )
 
   // Show modal when a message is scheduled
   useEffect(() => {
@@ -57,7 +63,7 @@ const SendingPanel = ({
   }
 
   const handleSchedule = async () => {
-    if (!canSend || !scheduledSending.scheduledDate || !scheduledSending.scheduledTime) return
+    if (!canSend || !scheduledSending.scheduledDate || !scheduledSending.scheduledTime || !hasMessagingServiceConfigured || scheduleWindowError) return
     
     setIsProcessing(true)
     try {
@@ -280,29 +286,46 @@ const SendingPanel = ({
             )}
           </button>
         ) : (
-          <button
-            onClick={handleSchedule}
-            disabled={!canSend || !scheduledSending.scheduledDate || !scheduledSending.scheduledTime || isProcessing}
-            className={`flex-1 inline-flex items-center justify-center px-6 py-3 border border-transparent rounded-lg text-base font-medium text-white transition-colors ${
-              canSend && scheduledSending.scheduledDate && scheduledSending.scheduledTime && !isProcessing
-                ? 'bg-blue-600 hover:bg-blue-700'
-                : 'bg-gray-400 cursor-not-allowed'
-            }`}
+          <div
+            className="flex-1"
+            title={!hasMessagingServiceConfigured ? 'Scheduling requires Sender Type: Messaging Service with a Messaging Service SID.' : ''}
           >
-            {isProcessing ? (
-              <>
-                <div className="animate-spin -ml-1 mr-3 h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
-                Scheduling...
-              </>
-            ) : (
-              <>
-                <Clock className="w-5 h-5 mr-2" />
-                Schedule Messages
-              </>
-            )}
-          </button>
+            <button
+              onClick={handleSchedule}
+              disabled={!canSend || !scheduledSending.scheduledDate || !scheduledSending.scheduledTime || !hasMessagingServiceConfigured || Boolean(scheduleWindowError) || isProcessing}
+              className={`w-full inline-flex items-center justify-center px-6 py-3 border border-transparent rounded-lg text-base font-medium text-white transition-colors ${
+                canSend && scheduledSending.scheduledDate && scheduledSending.scheduledTime && hasMessagingServiceConfigured && !scheduleWindowError && !isProcessing
+                  ? 'bg-blue-600 hover:bg-blue-700'
+                  : 'bg-gray-400 cursor-not-allowed'
+              }`}
+            >
+              {isProcessing ? (
+                <>
+                  <div className="animate-spin -ml-1 mr-3 h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
+                  Scheduling...
+                </>
+              ) : (
+                <>
+                  <Clock className="w-5 h-5 mr-2" />
+                  Schedule Messages
+                </>
+              )}
+            </button>
+          </div>
         )}
       </div>
+
+      {sendingMode === 'scheduled' && !hasMessagingServiceConfigured && (
+        <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+          Scheduling requires <strong>Sender Type = Messaging Service</strong> with a valid Messaging Service SID.
+        </div>
+      )}
+
+      {sendingMode === 'scheduled' && scheduleWindowError && (
+        <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+          {scheduleWindowError}
+        </div>
+      )}
 
       {/* Warning */}
       <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
@@ -311,7 +334,18 @@ const SendingPanel = ({
           <li>Messages will be charged to your Twilio account</li>
           <li>Make sure you have sufficient Twilio account balance</li>
           <li>Test with a small group first if unsure</li>
-          <li>Scheduled messages can be cancelled before sending time</li>
+          <li>Scheduled messages must be at least {SCHEDULE_CONSTRAINTS.MIN_MINUTES_AHEAD} minutes ahead and within {SCHEDULE_CONSTRAINTS.MAX_DAYS_AHEAD} days</li>
+          <li>
+            View and cancel scheduled messages in the{' '}
+            <a
+              href="https://console.twilio.com/us1/monitor/insights/sms?frameUrl=%2Fconsole%2Fsms%2Finsights%2Fdelivery%3Fx-target-region%3Dus1&q=tabKey%3Dscheduled%26timeRangeFilterPreset%3DPAST_D_7"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline text-yellow-900 hover:text-yellow-950"
+            >
+              Twilio Console Scheduled Messages
+            </a>
+          </li>
         </ul>
       </div>
 

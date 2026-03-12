@@ -207,9 +207,6 @@ function App() {
                   updateScheduling={schedulerHook.updateScheduling}
                   lastScheduledMessage={schedulerHook.lastScheduledMessage}
                   clearLastScheduledMessage={schedulerHook.clearLastScheduledMessage}
-                  scheduledJobs={schedulerHook.scheduledJobs}
-                  onCancelScheduledJob={schedulerHook.cancelScheduledJob}
-                  onUpdateJobStatus={schedulerHook.updateJobStatus}
                   messageDelay={settingsHook.smsSettings.messageDelay}
                   onDelayChange={settingsHook.updateMessageDelay}
                   getEstimatedCompletionTime={settingsHook.getEstimatedCompletionTime}

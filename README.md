@@ -44,6 +44,23 @@ A bulk SMS application using Twilio API, built with React and Tailwind CSS.
 3. Compose message
 4. Send immediately or schedule for later
 
+## Deploying on Vercel
+
+This app deploys as a Vite frontend + serverless API under `/api/*`.
+
+### Vercel settings
+
+- Build command: `npm run build`
+- Output directory: `dist`
+- Node.js version: `20.x` or newer
+
+### Scheduling behavior
+
+- No cron jobs required
+- No external scheduler service required
+- `/api/schedule-sms` uses Twilio Message Scheduling (`sendAt` + `scheduleType: fixed`)
+- Scheduled sends require `senderConfig.type = messaging-service` and a valid Messaging Service SID
+
 ## CSV Format
 
 ```csv
