@@ -79,18 +79,6 @@ const ScheduleSuccessModal = ({
                   <div className="text-gray-700">{scheduledMessage.contactCount} contacts</div>
                 </div>
               </div>
-
-              <div className="flex items-center text-sm text-gray-600">
-                <Clock className="w-4 h-4 mr-3 text-orange-500" />
-                <div>
-                  <span className="font-medium text-gray-900">Scheduled Message IDs:</span>
-                  <div className="text-gray-700 font-mono text-xs break-all">
-                    {scheduledMessage.messageSids?.length
-                      ? scheduledMessage.messageSids.join(', ')
-                      : 'Available in Twilio Console logs'}
-                  </div>
-                </div>
-              </div>
             </div>
 
             {/* Message Preview */}
