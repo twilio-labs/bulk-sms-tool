@@ -26,7 +26,7 @@ const Navigation = ({
       id: 'message',
       label: 'Message',
       icon: MessageSquare,
-      description: 'Compose SMS'
+      description: 'Compose Message'
     },
     {
       id: 'analytics',

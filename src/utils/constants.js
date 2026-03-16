@@ -31,6 +31,9 @@ export const CONTACT_STATUS = {
 export const API_ENDPOINTS = {
   SEND_BULK_SMS: '/api/send-bulk-sms',
   SCHEDULE_SMS: '/api/schedule-sms',
+  CONTENT_TEMPLATES: '/api/content-templates',
+  SMS_PRICING: '/api/sms-pricing',
+  WHATSAPP_RATE_CARDS: '/api/whatsapp-rate-cards',
   SCHEDULED_JOBS: '/api/scheduled-jobs',
   JOB_RESULTS: '/api/job-results',
 }

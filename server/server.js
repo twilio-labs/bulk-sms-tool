@@ -3,6 +3,7 @@ import cors from 'cors';
 import twilio from 'twilio';
 import rateLimit from 'express-rate-limit';
 import { v4 as uuidv4 } from 'uuid';
+import https from 'https';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -15,7 +16,7 @@ app.use(express.json());
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many SMS requests from this IP, please try again later.'
+  message: 'Too many messaging requests from this IP, please try again later.'
 });
 
 app.use('/api/', limiter);
@@ -23,11 +24,44 @@ app.use('/api/', limiter);
 // In-memory storage for scheduled jobs (in production, use a database)
 const scheduledJobs = new Map();
 const scheduledTimeouts = new Map(); // Store timeout IDs for cancellation
+const SUPPORTED_CHANNELS = ['sms', 'whatsapp'];
+const WHATSAPP_CATEGORY_DEFAULT = 'marketing';
+const TWILIO_WHATSAPP_FEE_PER_MESSAGE = 0.005;
+const WHATSAPP_RATE_CARD_SOURCE_URL = 'https://www.twilio.com/en-us/whatsapp/pricing';
+const WHATSAPP_RATE_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+let whatsappRateCardCache = {
+  updatedAt: null,
+  countries: [],
+};
 
 // Validate phone number format
 const isValidPhoneNumber = (phone) => {
+  if (!phone || typeof phone !== 'string') {
+    return false;
+  }
+
+  const normalizedPhone = phone.replace(/^whatsapp:/i, '').trim();
   const phoneRegex = /^\+[1-9]\d{1,14}$/;
-  return phoneRegex.test(phone);
+  return phoneRegex.test(normalizedPhone);
+};
+
+const normalizeChannel = (channel) => {
+  if (!channel || typeof channel !== 'string') {
+    return 'sms';
+  }
+
+  const normalized = channel.toLowerCase().trim();
+  return SUPPORTED_CHANNELS.includes(normalized) ? normalized : null;
+};
+
+const formatAddressForChannel = (phone, channel) => {
+  const normalizedPhone = phone.replace(/^whatsapp:/i, '').trim();
+
+  if (channel === 'whatsapp') {
+    return `whatsapp:${normalizedPhone}`;
+  }
+
+  return normalizedPhone;
 };
 
 // Store completed job results
@@ -52,9 +86,198 @@ const personalizeMessage = (template, contact) => {
   return personalizedMessage;
 };
 
+const personalizeTemplateVariables = (variables, contact) => {
+  if (!variables || typeof variables !== 'object') {
+    return {};
+  }
+
+  const personalizedVariables = {};
+
+  Object.entries(variables).forEach(([key, value]) => {
+    if (typeof value === 'string') {
+      personalizedVariables[key] = personalizeMessage(value, contact);
+      return;
+    }
+
+    personalizedVariables[key] = value;
+  });
+
+  return personalizedVariables;
+};
+
+
+
+const parseRateCardAttribute = (value) => {
+  if (!value || typeof value !== 'string') {
+    return { rate: null, tierLimit: null, available: false };
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    const [rawRate, rawTierLimit, rawAvailable] = Array.isArray(parsed) ? parsed : [];
+
+    const rate = Number(rawRate);
+    const tierLimit = Number(rawTierLimit);
+
+    return {
+      rate: Number.isFinite(rate) ? rate : null,
+      tierLimit: Number.isFinite(tierLimit) ? tierLimit : null,
+      available: Boolean(rawAvailable),
+    };
+  } catch (error) {
+    return { rate: null, tierLimit: null, available: false };
+  }
+};
+
+const fetchTextFromUrl = (url) => {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, (response) => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(`Failed to fetch WhatsApp rate cards (HTTP ${response.statusCode})`));
+          response.resume();
+          return;
+        }
+
+        let data = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+          data += chunk;
+        });
+        response.on('end', () => {
+          resolve(data);
+        });
+      })
+      .on('error', (error) => {
+        reject(error);
+      });
+  });
+};
+
+const decodeHtmlEntities = (text) => {
+  if (!text || typeof text !== 'string') {
+    return '';
+  }
+
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#x2F;/g, '/')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const extractWhatsAppRateCardsFromHtml = (html) => {
+  if (!html || typeof html !== 'string') {
+    return [];
+  }
+
+  const optionRegex = /<option[^>]*value="([A-Z]{2})"[^>]*data-utility-rates="([^"]*)"[^>]*data-authentication-rates="([^"]*)"[^>]*data-marketing-rates="([^"]*)"[^>]*data-service-rates="([^"]*)"[^>]*>([\s\S]*?)<\/option>/gi;
+
+  const countries = [];
+  let match;
+
+  while ((match = optionRegex.exec(html)) !== null) {
+    const [, code, utilityRaw, authenticationRaw, marketingRaw, serviceRaw, rawLabel] = match;
+    const name = decodeHtmlEntities(rawLabel.replace(/<[^>]+>/g, ''));
+
+    if (!code || !name) {
+      continue;
+    }
+
+    countries.push({
+      code,
+      name,
+      rates: {
+        utility: parseRateCardAttribute(utilityRaw),
+        authentication: parseRateCardAttribute(authenticationRaw),
+        marketing: parseRateCardAttribute(marketingRaw),
+        service: parseRateCardAttribute(serviceRaw),
+      },
+    });
+  }
+
+  return countries.sort((a, b) => a.name.localeCompare(b.name));
+};
+
+const getWhatsAppRateCards = async () => {
+  const now = Date.now();
+  const isCacheValid = whatsappRateCardCache.updatedAt && now - whatsappRateCardCache.updatedAt < WHATSAPP_RATE_CACHE_TTL_MS;
+
+  if (isCacheValid && whatsappRateCardCache.countries.length > 0) {
+    return whatsappRateCardCache;
+  }
+
+  const html = await fetchTextFromUrl(WHATSAPP_RATE_CARD_SOURCE_URL);
+  const countries = extractWhatsAppRateCardsFromHtml(html);
+
+  if (!countries.length) {
+    throw new Error('Unable to parse WhatsApp rate cards from source');
+  }
+
+  whatsappRateCardCache = {
+    updatedAt: now,
+    countries,
+  };
+
+  return whatsappRateCardCache;
+};
+
+const extractEstimatedSmsPrice = (countryData) => {
+  const candidates = [];
+
+  const maybePush = (value) => {
+    const numeric = Number(value);
+    if (!Number.isNaN(numeric) && Number.isFinite(numeric) && numeric > 0) {
+      candidates.push(numeric);
+    }
+  };
+
+  const outboundPrices = countryData?.outboundSmsPrices || countryData?.outbound_sms_prices || [];
+
+  if (Array.isArray(outboundPrices)) {
+    outboundPrices.forEach((carrierPricing) => {
+      maybePush(carrierPricing?.currentPrice);
+      maybePush(carrierPricing?.current_price);
+      maybePush(carrierPricing?.price);
+
+      const nestedPrices = carrierPricing?.prices || [];
+      if (Array.isArray(nestedPrices)) {
+        nestedPrices.forEach((priceItem) => {
+          maybePush(priceItem?.currentPrice);
+          maybePush(priceItem?.current_price);
+          maybePush(priceItem?.basePrice);
+          maybePush(priceItem?.base_price);
+          maybePush(priceItem?.price);
+        });
+      }
+    });
+  }
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return Math.min(...candidates);
+};
+
+const parseBoolean = (value) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    return value.toLowerCase().trim() === 'true';
+  }
+
+  return false;
+};
+
 // Function to send bulk SMS
 const sendBulkSMSJob = async (jobData) => {
-  const { contacts, message, twilioConfig, senderConfig, jobId, messageDelay = 1000 } = jobData;
+  const { contacts, message, contentTemplate, twilioConfig, senderConfig, channel = 'sms', jobId, messageDelay = 1000 } = jobData;
   const client = twilio(twilioConfig.accountSid, twilioConfig.authToken);
   
   console.log(`Starting scheduled SMS job ${jobId} for ${contacts.length} contacts`);
@@ -69,22 +292,34 @@ const sendBulkSMSJob = async (jobData) => {
 
   for (const contact of contacts) {
     try {
-      if (!isValidPhoneNumber(contact.phone)) {
+      const contactPhone = typeof contact === 'string' ? contact : contact.phone;
+      const normalizedPhone = contactPhone?.replace(/^whatsapp:/i, '').trim();
+
+      if (!isValidPhoneNumber(normalizedPhone)) {
         throw new Error('Invalid phone number format');
       }
 
-      // Personalize the message for this contact
-      const personalizedMessage = personalizeMessage(message, contact);
-
       // Prepare message parameters based on sender configuration
       const messageParams = {
-        body: personalizedMessage,
-        to: contact.phone
+        to: formatAddressForChannel(normalizedPhone, channel)
       };
+
+      const useContentTemplate = channel === 'whatsapp' && contentTemplate?.contentSid;
+
+      if (useContentTemplate) {
+        const personalizedVariables = personalizeTemplateVariables(contentTemplate.variables, contact);
+        messageParams.contentSid = contentTemplate.contentSid;
+        if (Object.keys(personalizedVariables).length > 0) {
+          messageParams.contentVariables = JSON.stringify(personalizedVariables);
+        }
+      } else {
+        const personalizedMessage = personalizeMessage(message, contact);
+        messageParams.body = personalizedMessage;
+      }
 
       // Set sender based on configuration
       if (senderConfig.type === 'phone') {
-        messageParams.from = senderConfig.phoneNumber;
+        messageParams.from = formatAddressForChannel(senderConfig.phoneNumber, channel);
       } else if (senderConfig.type === 'messaging-service') {
         messageParams.messagingServiceSid = senderConfig.messagingServiceSid;
       }
@@ -93,11 +328,11 @@ const sendBulkSMSJob = async (jobData) => {
 
       successCount++;
       results.successful.push({
-        phone: contact.phone,
+        phone: normalizedPhone,
         messageSid: smsResponse.sid,
         status: smsResponse.status
       });
-      console.log(`SMS sent to ${contact.phone}`);
+      console.log(`Message sent to ${normalizedPhone} via ${channel}`);
       
       // Add delay to avoid rate limiting (skip if messageDelay is 0)
       if (messageDelay > 0) {
@@ -106,14 +341,16 @@ const sendBulkSMSJob = async (jobData) => {
       
     } catch (error) {
       failedCount++;
-      const errorMsg = `${contact.phone}: ${error.message}`;
+      const contactPhone = typeof contact === 'string' ? contact : contact.phone;
+      const normalizedPhone = contactPhone?.replace(/^whatsapp:/i, '').trim();
+      const errorMsg = `${normalizedPhone}: ${error.message}`;
       errors.push(errorMsg);
       results.failed.push({
-        phone: contact.phone,
+        phone: normalizedPhone,
         error: error.message,
         code: error.code
       });
-      console.error(`❌ Failed to send SMS to ${contact.phone}:`, error.message);
+      console.error(`❌ Failed to send message to ${normalizedPhone}:`, error.message);
     }
   }
 
@@ -146,6 +383,48 @@ const sendBulkSMSJob = async (jobData) => {
   
   return { successCount, failedCount, errors, results };
 };
+
+// Fetch approved WhatsApp senders endpoint
+app.post('/api/whatsapp-senders', async (req, res) => {
+  try {
+    const { accountSid, authToken } = req.body;
+
+    if (!accountSid || !authToken) {
+      return res.status(400).json({
+        error: 'Missing required Twilio credentials'
+      });
+    }
+
+    const client = twilio(accountSid, authToken);
+    const senders = await client.messaging.v2.channelsSenders.list({
+      channel: 'whatsapp',
+      limit: 1000
+    });
+
+    const formattedSenders = senders.map((sender) => ({
+      sid: sender.sid,
+      phoneNumber: sender.senderId?.replace(/^whatsapp:/i, ''),
+      friendlyName: sender.profile?.name || sender.senderId?.replace(/^whatsapp:/i, ''),
+      status: sender.status,
+      dateCreated: sender.dateCreated,
+      dateUpdated: sender.dateUpdated
+    }));
+
+    res.json(formattedSenders);
+  } catch (error) {
+    console.error('Error fetching WhatsApp senders:', error);
+
+    if (error.code === 20003) {
+      return res.status(401).json({
+        error: 'Authentication failed - check your Account SID and Auth Token'
+      });
+    }
+
+    res.status(500).json({
+      error: error.message || 'Failed to fetch WhatsApp senders'
+    });
+  }
+});
 
 // Fetch messaging services endpoint
 app.post('/api/messaging-services', async (req, res) => {
@@ -190,10 +469,132 @@ app.post('/api/messaging-services', async (req, res) => {
   }
 });
 
+app.post('/api/content-templates', async (req, res) => {
+  try {
+    const { accountSid, authToken, includeUnapproved = false } = req.body;
+    const shouldIncludeUnapproved = parseBoolean(includeUnapproved);
+
+    if (!accountSid || !authToken) {
+      return res.status(400).json({
+        error: 'Missing required Twilio credentials'
+      });
+    }
+
+    const client = twilio(accountSid, authToken);
+    const contentAndApprovals = await client.content.v1.contentAndApprovals.list({ limit: 200 });
+
+    const filteredTemplates = contentAndApprovals
+      .filter((template) => {
+        const approval = template.approvalRequests;
+        if (!approval) return false;
+        if (!shouldIncludeUnapproved && approval.status !== 'approved') return false;
+        return true;
+      })
+      .map((template) => {
+        const approval = template.approvalRequests;
+        return {
+          sid: template.sid,
+          friendlyName: template.friendlyName,
+          language: template.language,
+          variables: template.variables || {},
+          types: template.types || {},
+          dateCreated: template.dateCreated,
+          dateUpdated: template.dateUpdated,
+          whatsappApprovalStatus: approval.status,
+          whatsappCategory: (approval.category || WHATSAPP_CATEGORY_DEFAULT).toLowerCase(),
+        };
+      });
+
+    res.json(filteredTemplates);
+  } catch (error) {
+    console.error('Error fetching content templates:', error);
+
+    if (error.code === 20003) {
+      return res.status(401).json({
+        error: 'Authentication failed - check your Account SID and Auth Token'
+      });
+    }
+
+    res.status(500).json({
+      error: error.message || 'Failed to fetch content templates'
+    });
+  }
+});
+
+app.get('/api/whatsapp-rate-cards', async (_req, res) => {
+  try {
+    const rateCards = await getWhatsAppRateCards();
+
+    res.json({
+      source: 'twilio-whatsapp-pricing-calculator',
+      sourceUrl: WHATSAPP_RATE_CARD_SOURCE_URL,
+      twilioFeePerMessage: TWILIO_WHATSAPP_FEE_PER_MESSAGE,
+      updatedAt: new Date(rateCards.updatedAt).toISOString(),
+      countries: rateCards.countries,
+    });
+  } catch (error) {
+    console.error('Error loading WhatsApp rate cards:', error.message);
+    res.status(500).json({
+      error: error.message || 'Failed to load WhatsApp rate cards',
+    });
+  }
+});
+
+app.post('/api/sms-pricing', async (req, res) => {
+  try {
+    const { accountSid, authToken, countryCode } = req.body;
+
+    if (!accountSid || !authToken) {
+      return res.status(400).json({
+        error: 'Missing required Twilio credentials'
+      });
+    }
+
+    if (!countryCode || typeof countryCode !== 'string') {
+      return res.status(400).json({
+        error: 'Country code is required (ISO-2, e.g., US, GB, FR)'
+      });
+    }
+
+    const normalizedCountryCode = countryCode.toUpperCase().trim();
+    const client = twilio(accountSid, authToken);
+    const country = await client.pricing.v1.messaging.countries(normalizedCountryCode).fetch();
+
+    const estimatedOutboundPrice = extractEstimatedSmsPrice(country);
+
+    res.json({
+      countryCode: normalizedCountryCode,
+      country: country?.country || normalizedCountryCode,
+      priceUnit: country?.priceUnit || country?.price_unit || 'USD',
+      estimatedOutboundPrice,
+      source: 'twilio-pricing-api'
+    });
+  } catch (error) {
+    console.error('Error fetching SMS pricing:', error);
+
+    if (error.code === 20003) {
+      return res.status(401).json({
+        error: 'Authentication failed - check your Account SID and Auth Token'
+      });
+    }
+
+    res.status(500).json({
+      error: error.message || 'Failed to fetch SMS pricing'
+    });
+  }
+});
+
 // Bulk SMS endpoint
 app.post('/api/send-bulk-sms', async (req, res) => {
   try {
-    const { contacts, message, twilioConfig, senderConfig, messageDelay = 1000 } = req.body;
+    const { contacts, message, contentTemplate, twilioConfig, senderConfig, channel = 'sms', messageDelay = 1000 } = req.body;
+    const normalizedChannel = normalizeChannel(channel);
+
+    if (!normalizedChannel) {
+      return res.status(400).json({
+        error: `Invalid channel. Must be one of: ${SUPPORTED_CHANNELS.join(', ')}`
+      });
+    }
 
     if (!contacts || !Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({ 
@@ -251,6 +652,20 @@ app.post('/api/send-bulk-sms', async (req, res) => {
       failed: []
     };
 
+    const useContentTemplate = normalizedChannel === 'whatsapp' && contentTemplate?.contentSid;
+
+    if (!useContentTemplate && (!message || !message.trim())) {
+      return res.status(400).json({
+        error: 'Message content is required when no content template is selected'
+      });
+    }
+
+    if (normalizedChannel === 'whatsapp' && contentTemplate && !contentTemplate.contentSid) {
+      return res.status(400).json({
+        error: 'Invalid content template configuration'
+      });
+    }
+
     // Send SMS to each contact with delay to avoid rate limiting
     for (let i = 0; i < contacts.length; i++) {
       const contact = contacts[i];
@@ -258,29 +673,38 @@ app.post('/api/send-bulk-sms', async (req, res) => {
       try {
         // Handle both contact objects and simple phone number strings
         const phoneNumber = typeof contact === 'string' ? contact : contact.phone;
+        const normalizedPhone = phoneNumber?.replace(/^whatsapp:/i, '').trim();
         
-        if (!isValidPhoneNumber(phoneNumber)) {
+        if (!isValidPhoneNumber(normalizedPhone)) {
           results.failed.push({
-            phone: phoneNumber,
+            phone: normalizedPhone,
             error: 'Invalid phone number format'
           });
           continue;
         }
 
-        // Personalize the message if contact is an object with data
-        const personalizedMessage = typeof contact === 'object' 
-          ? personalizeMessage(message, contact)
-          : message;
-
         // Prepare message parameters based on sender configuration
         const messageParams = {
-          body: personalizedMessage,
-          to: phoneNumber
+          to: formatAddressForChannel(normalizedPhone, normalizedChannel)
         };
+
+        if (useContentTemplate) {
+          const personalizedVariables = personalizeTemplateVariables(contentTemplate.variables, contact);
+          messageParams.contentSid = contentTemplate.contentSid;
+          if (Object.keys(personalizedVariables).length > 0) {
+            messageParams.contentVariables = JSON.stringify(personalizedVariables);
+          }
+        } else {
+          const personalizedMessage = typeof contact === 'object'
+            ? personalizeMessage(message, contact)
+            : message;
+
+          messageParams.body = personalizedMessage;
+        }
 
         // Set sender based on configuration
         if (senderConfig.type === 'phone') {
-          messageParams.from = senderConfig.phoneNumber;
+          messageParams.from = formatAddressForChannel(senderConfig.phoneNumber, normalizedChannel);
         } else if (senderConfig.type === 'messaging-service') {
           messageParams.messagingServiceSid = senderConfig.messagingServiceSid;
         }
@@ -288,7 +712,7 @@ app.post('/api/send-bulk-sms', async (req, res) => {
         const smsResponse = await client.messages.create(messageParams);
 
         results.successful.push({
-          phone: phoneNumber,
+          phone: normalizedPhone,
           messageSid: smsResponse.sid,
           status: smsResponse.status
         });
@@ -300,8 +724,9 @@ app.post('/api/send-bulk-sms', async (req, res) => {
 
       } catch (error) {
         const phoneNumber = typeof contact === 'string' ? contact : contact.phone;
+        const normalizedPhone = phoneNumber?.replace(/^whatsapp:/i, '').trim();
         results.failed.push({
-          phone: phoneNumber,
+          phone: normalizedPhone,
           error: error.message,
           code: error.code
         });
@@ -329,7 +754,14 @@ app.post('/api/send-bulk-sms', async (req, res) => {
 // Scheduled SMS endpoint
 app.post('/api/schedule-sms', async (req, res) => {
   try {
-    const { contacts, message, twilioConfig, senderConfig, scheduledDateTime, messageDelay = 1000 } = req.body;
+    const { contacts, message, contentTemplate, twilioConfig, senderConfig, channel = 'sms', scheduledDateTime, messageDelay = 1000 } = req.body;
+    const normalizedChannel = normalizeChannel(channel);
+
+    if (!normalizedChannel) {
+      return res.status(400).json({
+        error: `Invalid channel. Must be one of: ${SUPPORTED_CHANNELS.join(', ')}`
+      });
+    }
 
     if (!contacts || !Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({ 
@@ -363,6 +795,20 @@ app.post('/api/schedule-sms', async (req, res) => {
     if (!accountSid || !authToken) {
       return res.status(400).json({ 
         error: 'Missing Twilio credentials (Account SID and Auth Token required)' 
+      });
+    }
+
+    const useContentTemplate = normalizedChannel === 'whatsapp' && contentTemplate?.contentSid;
+
+    if (!useContentTemplate && (!message || !message.trim())) {
+      return res.status(400).json({
+        error: 'Message content is required when no content template is selected'
+      });
+    }
+
+    if (normalizedChannel === 'whatsapp' && contentTemplate && !contentTemplate.contentSid) {
+      return res.status(400).json({
+        error: 'Invalid content template configuration'
       });
     }
 
@@ -402,10 +848,15 @@ app.post('/api/schedule-sms', async (req, res) => {
     // Store job data
     const jobData = {
       jobId,
-      contacts: contacts.filter(contact => isValidPhoneNumber(contact.phone)),
+      contacts: contacts.filter(contact => {
+        const phone = typeof contact === 'string' ? contact : contact.phone;
+        return isValidPhoneNumber(phone);
+      }),
       message,
+      contentTemplate,
       twilioConfig,
       senderConfig,
+      channel: normalizedChannel,
       scheduledDateTime: scheduleDate,
       status: 'scheduled',
       messageDelay
@@ -441,9 +892,10 @@ app.post('/api/schedule-sms', async (req, res) => {
     res.json({
       success: true,
       jobId,
+      channel: normalizedChannel,
       scheduledDateTime: scheduleDate.toISOString(),
       contactCount: jobData.contacts.length,
-      message: 'SMS successfully scheduled'
+      message: 'Messages successfully scheduled'
     });
 
   } catch (error) {
@@ -458,10 +910,19 @@ app.post('/api/schedule-sms', async (req, res) => {
 app.get('/api/scheduled-jobs', (req, res) => {
   const jobs = Array.from(scheduledJobs.values()).map(job => ({
     jobId: job.jobId,
+    channel: job.channel || 'sms',
+    contentTemplate: job.contentTemplate
+      ? {
+          contentSid: job.contentTemplate.contentSid,
+          friendlyName: job.contentTemplate.friendlyName,
+        }
+      : null,
     scheduledDateTime: job.scheduledDateTime,
     contactCount: job.contacts.length,
     status: job.status,
-    message: job.message.substring(0, 50) + (job.message.length > 50 ? '...' : '')
+    message: job.message
+      ? job.message.substring(0, 50) + (job.message.length > 50 ? '...' : '')
+      : `Template: ${job.contentTemplate?.friendlyName || job.contentTemplate?.contentSid || 'Twilio Content Template'}`
   }));
 
   res.json({ jobs, totalJobs: jobs.length });
@@ -535,6 +996,6 @@ app.get('/api/health', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`SMS Bulk Sender API running on http://localhost:${PORT}`);
-  console.log(`Ready to send SMS messages via Twilio`);
+  console.log(`Bulk Sender API running on http://localhost:${PORT}`);
+  console.log(`Ready to send SMS and WhatsApp messages via Twilio`);
 });
