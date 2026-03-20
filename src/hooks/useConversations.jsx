@@ -22,6 +22,7 @@ export const useConversations = () => {
   const realtimeInitPromiseRef = useRef(null)
   const realtimeInitConfigKeyRef = useRef(null)
   const realtimeStatusRef = useRef('disconnected')
+  const realtimeRateLimitedUntilRef = useRef(0)
 
   useEffect(() => {
     realtimeStatusRef.current = realtimeStatus
@@ -500,6 +501,14 @@ export const useConversations = () => {
       return false
     }
 
+    const now = Date.now()
+    if (now < realtimeRateLimitedUntilRef.current) {
+      const waitSeconds = Math.max(1, Math.ceil((realtimeRateLimitedUntilRef.current - now) / 1000))
+      setRealtimeStatus('disconnected')
+      setError(`Realtime is temporarily rate-limited. Please wait ${waitSeconds}s and try again.`)
+      return false
+    }
+
     const configKey = [
       twilioConfig.accountSid || '',
       twilioConfig.apiKeySid || '',
@@ -524,6 +533,12 @@ export const useConversations = () => {
 
     twilioConfigRef.current = twilioConfig
 
+    if (!twilioConfig?.accountSid) {
+      setRealtimeStatus('disconnected')
+      setError('Realtime requires Account SID in Twilio settings')
+      return false
+    }
+
     if (!twilioConfig?.apiKeySid || !twilioConfig?.apiKeySecret) {
       setRealtimeStatus('disconnected')
       setError('Realtime requires API Key SID and API Key Secret in Twilio settings')
@@ -540,57 +555,81 @@ export const useConversations = () => {
       try {
       setRealtimeStatus('connecting')
 
-      const storedIdentity = sessionStorage.getItem('twilio-conversations-identity')
+      let requestedIdentity = sessionStorage.getItem('twilio-conversations-identity') || undefined
+      let retriedWithoutStoredIdentity = false
+      let tokenData = null
+      let client = null
 
-      const tokenResponse = await fetch(API_ENDPOINTS.CONVERSATIONS_TOKEN, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          twilioConfig,
-          identity: storedIdentity || undefined,
+      while (true) {
+        const tokenResponse = await fetch(API_ENDPOINTS.CONVERSATIONS_TOKEN, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            twilioConfig,
+            identity: requestedIdentity,
+          })
         })
-      })
 
-      if (!tokenResponse.ok) {
-        const errBody = await tokenResponse.json().catch(() => ({}))
-        if (tokenResponse.status === 429) {
-          throw new Error('Too many realtime initialization attempts. Please wait a minute and try again.')
+        if (!tokenResponse.ok) {
+          const errBody = await tokenResponse.json().catch(() => ({}))
+          if (tokenResponse.status === 429) {
+            realtimeRateLimitedUntilRef.current = Date.now() + 60 * 1000
+            throw new Error('Too many realtime initialization attempts. Please wait a minute and try again.')
+          }
+          throw new Error(errBody.error || `Token request failed (HTTP ${tokenResponse.status})`)
         }
-        throw new Error(errBody.error || `Token request failed (HTTP ${tokenResponse.status})`)
+
+        tokenData = await tokenResponse.json()
+        if (!tokenData.token) {
+          throw new Error('No token returned from server')
+        }
+
+        client = new TwilioConversationsClient(tokenData.token)
+
+        try {
+          await new Promise((resolve, reject) => {
+            const onState = (state) => {
+              if (state === 'connected') {
+                client.off('connectionStateChanged', onState)
+                resolve()
+              } else if (state === 'denied') {
+                client.off('connectionStateChanged', onState)
+                reject(new Error('Realtime connection denied - check API Key permissions and Conversations access'))
+              }
+            }
+
+            client.on('connectionStateChanged', onState)
+
+            if (client.connectionState === 'connected') {
+              client.off('connectionStateChanged', onState)
+              resolve()
+            }
+          })
+
+          break
+        } catch (connectionError) {
+          const denied = String(connectionError?.message || '').toLowerCase().includes('denied')
+
+          client.removeAllListeners()
+          client.shutdown()
+
+          if (denied && requestedIdentity && !retriedWithoutStoredIdentity) {
+            retriedWithoutStoredIdentity = true
+            requestedIdentity = undefined
+            sessionStorage.removeItem('twilio-conversations-identity')
+            continue
+          }
+
+          throw connectionError
+        }
       }
 
-      const tokenData = await tokenResponse.json()
-      if (!tokenData.token) {
-        throw new Error('No token returned from server')
-      }
-
-      const client = new TwilioConversationsClient(tokenData.token)
-
-      if (tokenData.identity) {
+      if (tokenData?.identity) {
         sessionStorage.setItem('twilio-conversations-identity', tokenData.identity)
         setRealtimeIdentity(tokenData.identity)
       }
-
-      await new Promise((resolve, reject) => {
-        const onState = (state) => {
-          if (state === 'connected') {
-            client.off('connectionStateChanged', onState)
-            resolve()
-          } else if (state === 'denied') {
-            client.off('connectionStateChanged', onState)
-            reject(new Error('Realtime connection denied - check API Key permissions and Conversations access'))
-          }
-        }
-
-        client.on('connectionStateChanged', onState)
-
-        if (client.connectionState === 'connected') {
-          client.off('connectionStateChanged', onState)
-          resolve()
-        }
-      })
 
       client.on('connectionStateChanged', (state) => {
         if (state === 'connected') {
