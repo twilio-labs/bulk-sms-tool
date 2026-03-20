@@ -7,7 +7,8 @@ const TwilioSettings = ({
   clearTwilioConfig 
 }) => {
   const [showTokens, setShowTokens] = useState({
-    authToken: false
+    authToken: false,
+    apiKeySecret: false
   })
 
   const handleInputChange = (field, value) => {
@@ -86,6 +87,7 @@ const TwilioSettings = ({
         <ol className="text-sm text-red-700 mt-2 space-y-1 list-decimal list-inside">
           <li>Log into your <a href="https://console.twilio.com/" target="_blank" rel="noopener noreferrer" className="underline">Twilio Console</a></li>
           <li>Account SID and Auth Token are on your main dashboard</li>
+          <li>API Key SID/Secret are under Account - API keys & tokens</li>
         </ol>
         <div className="mt-3 pt-3 border-t border-red-200">
           <p className="text-xs text-red-600">
