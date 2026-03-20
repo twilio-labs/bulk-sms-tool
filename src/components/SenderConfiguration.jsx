@@ -9,6 +9,9 @@ const SenderConfiguration = ({
   const [channel, setChannel] = useState(senderConfig?.channel || 'sms')
   const [senderType, setSenderType] = useState(senderConfig?.type || 'phone')
   const [messagingServices, setMessagingServices] = useState([])
+  const [whatsappSenders, setWhatsappSenders] = useState([])
+  const [loadingWhatsappSenders, setLoadingWhatsappSenders] = useState(false)
+  const [whatsappSendersError, setWhatsappSendersError] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -23,6 +26,42 @@ const SenderConfiguration = ({
       fetchMessagingServices()
     }
   }, [twilioConfig?.accountSid, twilioConfig?.authToken, senderType])
+
+  // Fetch approved WhatsApp senders when channel is WhatsApp and credentials are available
+  useEffect(() => {
+    if (twilioConfig?.accountSid && twilioConfig?.authToken && channel === 'whatsapp' && senderType === 'phone') {
+      fetchWhatsappSenders()
+    }
+  }, [twilioConfig?.accountSid, twilioConfig?.authToken, channel, senderType])
+
+  const fetchWhatsappSenders = async () => {
+    setLoadingWhatsappSenders(true)
+    setWhatsappSendersError(null)
+
+    try {
+      const response = await fetch('/api/whatsapp-senders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountSid: twilioConfig.accountSid,
+          authToken: twilioConfig.authToken
+        })
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error || 'Failed to fetch WhatsApp senders')
+      }
+
+      const senders = await response.json()
+      setWhatsappSenders(senders)
+    } catch (err) {
+      setWhatsappSendersError(err.message)
+      console.error('Error fetching WhatsApp senders:', err)
+    } finally {
+      setLoadingWhatsappSenders(false)
+    }
+  }
 
   const fetchMessagingServices = async () => {
     setLoading(true)
@@ -173,25 +212,89 @@ const SenderConfiguration = ({
       {/* Phone Number Input */}
       {senderType === 'phone' && (
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            <Phone className="inline w-4 h-4 mr-2" />
-            From Number
-          </label>
-          <input
-            type="text"
-            value={senderConfig?.phoneNumber || ''}
-            onChange={(e) => handlePhoneNumberChange(e.target.value)}
-            placeholder={
-              channel === 'whatsapp'
-                ? 'Enter your WhatsApp-enabled Twilio number (e.g., +14155238886)'
-                : 'Enter your Twilio phone number (e.g., +1234567890)'
-            }
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:shadow-lg transition-shadow"
-          />
-          <p className="text-xs text-gray-500 mt-2">
-            Must include country code in E.164 format (e.g., +1 for US, +57 for Colombia).
-            {channel === 'whatsapp' && ' The app will automatically send using the whatsapp: prefix.'}
-          </p>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-gray-700">
+              <Phone className="inline w-4 h-4 mr-2" />
+              From Number
+            </label>
+            {channel === 'whatsapp' && hasCredentials && (
+              <button
+                type="button"
+                onClick={fetchWhatsappSenders}
+                disabled={loadingWhatsappSenders}
+                className="flex items-center px-3 py-1 text-xs text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3 h-3 mr-1 ${loadingWhatsappSenders ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            )}
+          </div>
+
+          {whatsappSendersError && channel === 'whatsapp' && (
+            <div className="flex items-center p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg mb-3">
+              <AlertCircle className="w-4 h-4 mr-2" />
+              {whatsappSendersError}
+            </div>
+          )}
+
+          {channel === 'whatsapp' && loadingWhatsappSenders ? (
+            <div className="flex items-center justify-center py-8 text-gray-500">
+              <RefreshCw className="w-5 h-5 animate-spin mr-2" />
+              Loading WhatsApp senders...
+            </div>
+          ) : channel === 'whatsapp' && hasCredentials && whatsappSenders.length > 0 ? (
+            <>
+              <select
+                value={senderConfig?.phoneNumber || ''}
+                onChange={(e) => handlePhoneNumberChange(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:shadow-lg transition-shadow"
+              >
+                <option value="">Select an approved WhatsApp sender</option>
+                {[...whatsappSenders]
+                  .sort((a, b) => {
+                    const SANDBOX = '+14155238886'
+                    if (a.phoneNumber === SANDBOX) return 1
+                    if (b.phoneNumber === SANDBOX) return -1
+                    return 0
+                  })
+                  .map((sender) => {
+                    const SANDBOX = '+14155238886'
+                    const isSandbox = sender.phoneNumber === SANDBOX
+                    const label = isSandbox
+                      ? `${sender.phoneNumber} — Sandbox Sender`
+                      : sender.friendlyName !== sender.phoneNumber
+                        ? `${sender.friendlyName} (${sender.phoneNumber})`
+                        : sender.phoneNumber
+                    return (
+                      <option key={sender.sid} value={sender.phoneNumber}>
+                        {label}
+                      </option>
+                    )
+                  })}
+              </select>
+              <p className="text-xs text-gray-500 mt-2">
+                Showing approved WhatsApp senders from your Twilio account. The app will automatically send using the whatsapp: prefix.
+              </p>
+            </>
+          ) : (
+            <>
+              <input
+                type="text"
+                value={senderConfig?.phoneNumber || ''}
+                onChange={(e) => handlePhoneNumberChange(e.target.value)}
+                placeholder={
+                  channel === 'whatsapp'
+                    ? 'Enter your WhatsApp-enabled Twilio number (e.g., +14155238886)'
+                    : 'Enter your Twilio phone number (e.g., +1234567890)'
+                }
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:shadow-lg transition-shadow"
+              />
+              <p className="text-xs text-gray-500 mt-2">
+                Must include country code in E.164 format (e.g., +1 for US, +57 for Colombia).
+                {channel === 'whatsapp' && ' The app will automatically send using the whatsapp: prefix.'}
+              </p>
+            </>
+          )}
         </div>
       )}
 

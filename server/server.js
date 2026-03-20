@@ -105,102 +105,7 @@ const personalizeTemplateVariables = (variables, contact) => {
   return personalizedVariables;
 };
 
-const normalizeApprovalStatus = (status) => {
-  if (!status || typeof status !== 'string') {
-    return null;
-  }
 
-  return status.toLowerCase().trim();
-};
-
-const normalizeWhatsAppCategory = (category) => {
-  if (!category || typeof category !== 'string') {
-    return null;
-  }
-
-  const normalized = category.toLowerCase().trim();
-
-  if (normalized.includes('auth')) {
-    return 'authentication';
-  }
-
-  if (normalized.includes('utility')) {
-    return 'utility';
-  }
-
-  if (normalized.includes('marketing')) {
-    return 'marketing';
-  }
-
-  if (normalized.includes('service')) {
-    return 'service';
-  }
-
-  return null;
-};
-
-const isLikelyWhatsAppApprovalRequest = (request) => {
-  if (!request || typeof request !== 'object') {
-    return false;
-  }
-
-  const channelHint = String(request.channel || request.name || request.platform || '').toLowerCase();
-  if (channelHint.includes('whatsapp')) {
-    return true;
-  }
-
-  return !!normalizeWhatsAppCategory(request.category || request.template_category || request.message_category);
-};
-
-const extractApprovalMetadataFromRequest = (request) => {
-  if (!request || typeof request !== 'object') {
-    return null;
-  }
-
-  return {
-    status: normalizeApprovalStatus(request.status || request.approval_status),
-    category: normalizeWhatsAppCategory(request.category || request.template_category || request.message_category),
-  };
-};
-
-const extractWhatsAppApprovalMetadata = (template) => {
-  const approvalData = template?.approvalRequests || template?.approval_requests;
-
-  if (!approvalData) {
-    return null;
-  }
-
-  if (Array.isArray(approvalData)) {
-    const whatsappApproval = approvalData.find((request) => isLikelyWhatsAppApprovalRequest(request));
-    return extractApprovalMetadataFromRequest(whatsappApproval);
-  }
-
-  const whatsappApproval = approvalData.whatsapp || approvalData.WhatsApp || approvalData.WHATSAPP;
-  if (typeof whatsappApproval === 'string') {
-    return {
-      status: normalizeApprovalStatus(whatsappApproval),
-      category: null,
-    };
-  }
-
-  if (whatsappApproval && typeof whatsappApproval === 'object') {
-    return extractApprovalMetadataFromRequest(whatsappApproval);
-  }
-
-  return null;
-};
-
-const fetchWhatsAppApprovalMetadata = async (client, templateSid) => {
-  try {
-    const approvalRequests = await client.content.v1.contents(templateSid).approvalRequests.list({ limit: 20 });
-    const whatsappApproval = approvalRequests.find((request) => isLikelyWhatsAppApprovalRequest(request));
-
-    return extractApprovalMetadataFromRequest(whatsappApproval);
-  } catch (error) {
-    console.warn(`Unable to fetch WhatsApp approval for template ${templateSid}:`, error.message);
-    return null;
-  }
-};
 
 const parseRateCardAttribute = (value) => {
   if (!value || typeof value !== 'string') {
@@ -479,6 +384,48 @@ const sendBulkSMSJob = async (jobData) => {
   return { successCount, failedCount, errors, results };
 };
 
+// Fetch approved WhatsApp senders endpoint
+app.post('/api/whatsapp-senders', async (req, res) => {
+  try {
+    const { accountSid, authToken } = req.body;
+
+    if (!accountSid || !authToken) {
+      return res.status(400).json({
+        error: 'Missing required Twilio credentials'
+      });
+    }
+
+    const client = twilio(accountSid, authToken);
+    const senders = await client.messaging.v2.channelsSenders.list({
+      channel: 'whatsapp',
+      limit: 1000
+    });
+
+    const formattedSenders = senders.map((sender) => ({
+      sid: sender.sid,
+      phoneNumber: sender.senderId?.replace(/^whatsapp:/i, ''),
+      friendlyName: sender.profile?.name || sender.senderId?.replace(/^whatsapp:/i, ''),
+      status: sender.status,
+      dateCreated: sender.dateCreated,
+      dateUpdated: sender.dateUpdated
+    }));
+
+    res.json(formattedSenders);
+  } catch (error) {
+    console.error('Error fetching WhatsApp senders:', error);
+
+    if (error.code === 20003) {
+      return res.status(401).json({
+        error: 'Authentication failed - check your Account SID and Auth Token'
+      });
+    }
+
+    res.status(500).json({
+      error: error.message || 'Failed to fetch WhatsApp senders'
+    });
+  }
+});
+
 // Fetch messaging services endpoint
 app.post('/api/messaging-services', async (req, res) => {
   try {
@@ -534,32 +481,29 @@ app.post('/api/content-templates', async (req, res) => {
     }
 
     const client = twilio(accountSid, authToken);
-    const templates = await client.content.v1.contents.list({ limit: 200 });
+    const contentAndApprovals = await client.content.v1.contentAndApprovals.list({ limit: 200 });
 
-    const filteredTemplates = [];
-
-    for (const template of templates) {
-      const directApprovalMetadata = extractWhatsAppApprovalMetadata(template);
-      const fetchedApprovalMetadata = directApprovalMetadata || await fetchWhatsAppApprovalMetadata(client, template.sid);
-      const whatsappApprovalStatus = fetchedApprovalMetadata?.status || null;
-      const whatsappCategory = fetchedApprovalMetadata?.category || WHATSAPP_CATEGORY_DEFAULT;
-
-      if (!shouldIncludeUnapproved && whatsappApprovalStatus !== 'approved') {
-        continue;
-      }
-
-      filteredTemplates.push({
-        sid: template.sid,
-        friendlyName: template.friendlyName,
-        language: template.language,
-        variables: template.variables || {},
-        types: template.types || {},
-        dateCreated: template.dateCreated,
-        dateUpdated: template.dateUpdated,
-        whatsappApprovalStatus,
-        whatsappCategory,
+    const filteredTemplates = contentAndApprovals
+      .filter((template) => {
+        const approval = template.approvalRequests;
+        if (!approval) return false;
+        if (!shouldIncludeUnapproved && approval.status !== 'approved') return false;
+        return true;
+      })
+      .map((template) => {
+        const approval = template.approvalRequests;
+        return {
+          sid: template.sid,
+          friendlyName: template.friendlyName,
+          language: template.language,
+          variables: template.variables || {},
+          types: template.types || {},
+          dateCreated: template.dateCreated,
+          dateUpdated: template.dateUpdated,
+          whatsappApprovalStatus: approval.status,
+          whatsappCategory: (approval.category || WHATSAPP_CATEGORY_DEFAULT).toLowerCase(),
+        };
       });
-    }
 
     res.json(filteredTemplates);
   } catch (error) {
