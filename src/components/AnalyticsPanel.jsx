@@ -176,6 +176,13 @@ const AnalyticsPanel = ({
   if (isWhatsAppChannel) {
     return (
       <div className="space-y-6">
+        {whatsAppRatesLoading && (
+          <div className="flex items-center bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-blue-800">
+            <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+            <span className="text-sm font-medium">Loading WhatsApp rates...</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-lg p-4 text-white">
             <div className="flex items-center justify-between">
@@ -302,19 +309,28 @@ const AnalyticsPanel = ({
 
   return (
     <div className="space-y-6">
+      {pricingLoading && (
+        <div className="flex items-center bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-blue-800">
+          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+          <span className="text-sm font-medium">
+            Loading SMS pricing for {currentCountry?.name || smsPricingCountry}...
+          </span>
+        </div>
+      )}
+
       {/* Cost Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-lg p-4 text-white">
+      <div className={`grid grid-cols-1 md:grid-cols-3 gap-4 ${pricingLoading ? 'opacity-75' : ''}`}>
+        <div className={`bg-gradient-to-r from-green-500 to-green-600 rounded-lg p-4 text-white ${pricingLoading ? 'animate-pulse' : ''}`}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-green-100 text-sm">Cost per Message</p>
-              <p className="text-2xl font-bold">{estimatedRate !== null ? `$${costPerMessage.toFixed(4)}` : '—'}</p>
+              <p className="text-2xl font-bold">{pricingLoading ? 'Loading...' : estimatedRate !== null ? `$${costPerMessage.toFixed(4)}` : '—'}</p>
             </div>
             <Calculator className="h-8 w-8 text-green-200" />
           </div>
         </div>
 
-        <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg p-4 text-white">
+        <div className={`bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg p-4 text-white ${pricingLoading ? 'animate-pulse' : ''}`}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-blue-100 text-sm">Total Recipients</p>
@@ -324,11 +340,11 @@ const AnalyticsPanel = ({
           </div>
         </div>
 
-        <div className="bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg p-4 text-white">
+        <div className={`bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg p-4 text-white ${pricingLoading ? 'animate-pulse' : ''}`}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-purple-100 text-sm">Total Cost</p>
-              <p className="text-2xl font-bold">{estimatedRate !== null ? `$${totalCost.toFixed(2)}` : '—'}</p>
+              <p className="text-2xl font-bold">{pricingLoading ? 'Loading...' : estimatedRate !== null ? `$${totalCost.toFixed(2)}` : '—'}</p>
             </div>
             <DollarSign className="h-8 w-8 text-purple-200" />
           </div>
@@ -344,7 +360,8 @@ const AnalyticsPanel = ({
         <select
           value={smsPricingCountry}
           onChange={(e) => onSmsPricingCountryChange?.(e.target.value)}
-          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:shadow-lg transition-shadow"
+          disabled={pricingLoading}
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:shadow-lg transition-shadow disabled:bg-gray-50 disabled:text-gray-500"
         >
           {Object.entries(supportedCountries).map(([code, info]) => (
             <option key={code} value={code}>
@@ -353,7 +370,7 @@ const AnalyticsPanel = ({
           ))}
         </select>
         {pricingLoading && (
-          <p className="text-xs text-gray-500 mt-2">Loading account pricing from Twilio...</p>
+          <p className="text-xs text-blue-700 mt-2 font-medium">Updating pricing from Twilio...</p>
         )}
         {pricingError && (
           <p className="text-xs text-red-600 mt-2">{pricingError}</p>
@@ -393,28 +410,28 @@ const AnalyticsPanel = ({
       )}
 
       {/* Pricing Breakdown */}
-      <div className="border border-gray-200 rounded-lg p-4">
+      <div className={`border border-gray-200 rounded-lg p-4 ${pricingLoading ? 'opacity-80' : ''}`}>
         <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
           <DollarSign className="w-5 h-5 mr-2" />
           Pricing Breakdown
         </h3>
         
-        <div className="space-y-3">
+        <div className={`space-y-3 ${pricingLoading ? 'animate-pulse' : ''}`}>
           <div className="flex justify-between items-center py-2 border-b border-gray-100">
             <span className="text-gray-600">Base rate ({currentCountry.flag} {currentCountry.name})</span>
             <span className="font-medium">
-              {estimatedRate !== null ? `$${estimatedRate.toFixed(4)}/SMS segment` : 'Unavailable'}
+              {pricingLoading ? 'Loading...' : estimatedRate !== null ? `$${estimatedRate.toFixed(4)}/SMS segment` : 'Unavailable'}
             </span>
           </div>
           
           <div className="flex justify-between items-center py-2 border-b border-gray-100">
             <span className="text-gray-600">Message segments</span>
-            <span className="font-medium">×{segments}</span>
+            <span className="font-medium">{pricingLoading ? 'Loading...' : `×${segments}`}</span>
           </div>
           
           <div className="flex justify-between items-center py-2 border-b border-gray-100">
             <span className="text-gray-600">Cost per message</span>
-            <span className="font-medium">{estimatedRate !== null ? `$${costPerMessage.toFixed(4)}` : 'Unavailable'}</span>
+            <span className="font-medium">{pricingLoading ? 'Loading...' : estimatedRate !== null ? `$${costPerMessage.toFixed(4)}` : 'Unavailable'}</span>
           </div>
           
           <div className="flex justify-between items-center py-2 border-b border-gray-100">
@@ -424,7 +441,7 @@ const AnalyticsPanel = ({
           
           <div className="flex justify-between items-center py-3 bg-gray-50 px-3 rounded-lg">
             <span className="font-semibold text-gray-900">Total estimated cost</span>
-            <span className="font-bold text-xl text-purple-600">{estimatedRate !== null ? `$${totalCost.toFixed(2)}` : 'Unavailable'}</span>
+            <span className="font-bold text-xl text-purple-600">{pricingLoading ? 'Loading...' : estimatedRate !== null ? `$${totalCost.toFixed(2)}` : 'Unavailable'}</span>
           </div>
         </div>
       </div>

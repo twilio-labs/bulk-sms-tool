@@ -15,7 +15,11 @@ app.use(express.json());
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
-  message: 'Too many SMS requests from this IP, please try again later.'
+  message: 'Too many SMS requests from this IP, please try again later.',
+  skip: (req) => {
+    const path = req.path || '';
+    return path === '/conversations-token' || path === '/conversations' || /^\/conversations\/.+/.test(path);
+  },
 });
 
 app.use('/api/', limiter);
@@ -102,6 +106,40 @@ const parseTemplateVariables = (variables) => {
     return variables;
   }
   return {};
+};
+
+const extractEstimatedSmsPrice = (countryData) => {
+  const candidates = [];
+
+  const maybePush = (value) => {
+    const numeric = Number(value);
+    if (!Number.isNaN(numeric) && Number.isFinite(numeric) && numeric > 0) {
+      candidates.push(numeric);
+    }
+  };
+
+  const outboundPrices = countryData?.outboundSmsPrices || countryData?.outbound_sms_prices || [];
+
+  if (Array.isArray(outboundPrices)) {
+    outboundPrices.forEach((carrierPricing) => {
+      maybePush(carrierPricing?.currentPrice);
+      maybePush(carrierPricing?.current_price);
+      maybePush(carrierPricing?.price);
+
+      const nestedPrices = carrierPricing?.prices || [];
+      if (Array.isArray(nestedPrices)) {
+        nestedPrices.forEach((priceItem) => {
+          maybePush(priceItem?.currentPrice);
+          maybePush(priceItem?.current_price);
+          maybePush(priceItem?.basePrice);
+          maybePush(priceItem?.base_price);
+          maybePush(priceItem?.price);
+        });
+      }
+    });
+  }
+
+  return candidates.length > 0 ? Math.min(...candidates) : null;
 };
 
 const resolveTemplateVariablesForContact = (contentTemplate, contact) => {
@@ -250,14 +288,19 @@ app.post('/api/messaging-services', async (req, res) => {
 
 app.post('/api/content-templates', async (req, res) => {
   try {
-    const { accountSid, authToken, includeUnapproved = false } = req.body || {};
+    const { accountSid, authToken, apiKeySid, apiKeySecret, includeUnapproved = false } = req.body || {};
     const includeUnapprovedTemplates = includeUnapproved === true || includeUnapproved === 'true';
 
-    if (!accountSid || !authToken) {
-      return res.status(400).json({ error: 'Missing required Twilio credentials' });
+    const hasApiKeyCreds = Boolean(accountSid && apiKeySid && apiKeySecret);
+    const hasAuthTokenCreds = Boolean(accountSid && authToken);
+
+    if (!hasApiKeyCreds && !hasAuthTokenCreds) {
+      return res.status(400).json({ error: 'Missing required Twilio credentials (accountSid + authToken, or accountSid + apiKeySid + apiKeySecret)' });
     }
 
-    const client = twilio(accountSid, authToken);
+    const client = hasApiKeyCreds
+      ? twilio(apiKeySid, apiKeySecret, { accountSid })
+      : twilio(accountSid, authToken);
     const templates = await client.content.v2.contents.list({ limit: 200 });
 
     const normalizedTemplates = templates
@@ -298,7 +341,7 @@ app.post('/api/content-templates', async (req, res) => {
     res.json(normalizedTemplates);
   } catch (error) {
     if (error.code === 20003) {
-      return res.status(401).json({ error: 'Authentication failed - check your Account SID and Auth Token' });
+      return res.status(401).json({ error: 'Authentication failed - check your Twilio credentials (Auth Token or API Key)' });
     }
 
     res.status(500).json({ error: error.message || 'Failed to fetch content templates' });
@@ -316,19 +359,16 @@ app.post('/api/sms-pricing', async (req, res) => {
     const client = twilio(accountSid, authToken);
     const country = await client.pricing.v1.messaging.countries(String(countryCode).toUpperCase()).fetch();
 
-    const outboundPrices = Array.isArray(country?.outboundSmsPrices) ? country.outboundSmsPrices : [];
-    const numericPrices = outboundPrices
-      .map((entry) => Number(entry?.prices?.[0]?.currentPrice ?? entry?.prices?.[0]?.basePrice ?? entry?.currentPrice ?? entry?.basePrice))
-      .filter((value) => Number.isFinite(value) && value > 0);
-
-    const estimatedOutboundPrice = numericPrices.length > 0 ? Math.min(...numericPrices) : null;
+    const estimatedOutboundPrice = extractEstimatedSmsPrice(country);
 
     res.json({
       countryCode: country?.isoCountry || String(countryCode).toUpperCase(),
       countryName: country?.country || String(countryCode).toUpperCase(),
       estimatedOutboundPrice,
       priceUnit: 'USD',
-      sampleSize: numericPrices.length
+      sampleSize: Array.isArray(country?.outboundSmsPrices || country?.outbound_sms_prices)
+        ? (country?.outboundSmsPrices || country?.outbound_sms_prices).length
+        : 0
     });
   } catch (error) {
     if (error.code === 20003) {
@@ -437,6 +477,36 @@ app.post('/api/whatsapp-senders', async (req, res) => {
     }
 
     res.status(500).json({ error: error.message || 'Failed to fetch WhatsApp senders' });
+  }
+});
+
+app.post('/api/sms-senders', async (req, res) => {
+  try {
+    const { accountSid, authToken } = req.body || {};
+
+    if (!accountSid || !authToken) {
+      return res.status(400).json({ error: 'Missing required Twilio credentials' });
+    }
+
+    const client = twilio(accountSid, authToken);
+    const phoneNumbers = await client.incomingPhoneNumbers.list({ limit: 200 });
+
+    const senders = phoneNumbers
+      .filter((phoneNumberResource) => phoneNumberResource?.capabilities?.sms === true)
+      .map((phoneNumberResource) => ({
+        sid: phoneNumberResource.sid,
+        phoneNumber: phoneNumberResource.phoneNumber,
+        friendlyName: phoneNumberResource.friendlyName || phoneNumberResource.phoneNumber,
+        source: 'phone-number'
+      }));
+
+    res.json(senders);
+  } catch (error) {
+    if (error.code === 20003) {
+      return res.status(401).json({ error: 'Authentication failed - check your Account SID and Auth Token' });
+    }
+
+    res.status(500).json({ error: error.message || 'Failed to fetch SMS senders' });
   }
 });
 

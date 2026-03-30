@@ -10,6 +10,9 @@ const SenderConfiguration = ({
   const [channel, setChannel] = useState(senderConfig?.channel || 'sms')
   const [senderType, setSenderType] = useState(senderConfig?.type || 'phone')
   const [messagingServices, setMessagingServices] = useState([])
+  const [smsSenders, setSmsSenders] = useState([])
+  const [loadingSmsSenders, setLoadingSmsSenders] = useState(false)
+  const [smsSendersError, setSmsSendersError] = useState(null)
   const [whatsappSenders, setWhatsappSenders] = useState([])
   const [loadingWhatsappSenders, setLoadingWhatsappSenders] = useState(false)
   const [whatsappSendersError, setWhatsappSendersError] = useState(null)
@@ -34,6 +37,41 @@ const SenderConfiguration = ({
       fetchWhatsappSenders()
     }
   }, [twilioConfig?.accountSid, twilioConfig?.authToken, channel, senderType])
+
+  useEffect(() => {
+    if (twilioConfig?.accountSid && twilioConfig?.authToken && channel === 'sms' && senderType === 'phone') {
+      fetchSmsSenders()
+    }
+  }, [twilioConfig?.accountSid, twilioConfig?.authToken, channel, senderType])
+
+  const fetchSmsSenders = async () => {
+    setLoadingSmsSenders(true)
+    setSmsSendersError(null)
+
+    try {
+      const response = await fetch('/api/sms-senders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountSid: twilioConfig.accountSid,
+          authToken: twilioConfig.authToken
+        })
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error || 'Failed to fetch SMS senders')
+      }
+
+      const senders = await response.json()
+      setSmsSenders(senders)
+    } catch (err) {
+      setSmsSendersError(err.message)
+      console.error('Error fetching SMS senders:', err)
+    } finally {
+      setLoadingSmsSenders(false)
+    }
+  }
 
   const fetchWhatsappSenders = async () => {
     setLoadingWhatsappSenders(true)
@@ -233,6 +271,17 @@ const SenderConfiguration = ({
                 Refresh
               </button>
             )}
+            {channel === 'sms' && hasCredentials && (
+              <button
+                type="button"
+                onClick={fetchSmsSenders}
+                disabled={loadingSmsSenders}
+                className="flex items-center px-3 py-1 text-xs text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3 h-3 mr-1 ${loadingSmsSenders ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            )}
           </div>
 
           {whatsappSendersError && channel === 'whatsapp' && (
@@ -242,7 +291,44 @@ const SenderConfiguration = ({
             </div>
           )}
 
-          {channel === 'whatsapp' && loadingWhatsappSenders ? (
+          {smsSendersError && channel === 'sms' && (
+            <div className="flex items-center p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg mb-3">
+              <AlertCircle className="w-4 h-4 mr-2" />
+              {smsSendersError}
+            </div>
+          )}
+
+          {channel === 'sms' && loadingSmsSenders ? (
+            <div className="flex items-center justify-center py-8 text-gray-500">
+              <RefreshCw className="w-5 h-5 animate-spin mr-2" />
+              Loading SMS senders...
+            </div>
+          ) : channel === 'sms' && hasCredentials && smsSenders.length > 0 ? (
+            <>
+              <select
+                value={senderConfig?.phoneNumber || ''}
+                onChange={(e) => handlePhoneNumberChange(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:shadow-lg transition-shadow"
+              >
+                <option value="">Select an SMS sender number</option>
+                {smsSenders.map((sender) => {
+                  const label = sender.friendlyName !== sender.phoneNumber
+                    ? `${sender.friendlyName} (${sender.phoneNumber})`
+                    : sender.phoneNumber
+                  return (
+                    <option key={sender.sid} value={sender.phoneNumber}>
+                      {label}
+                    </option>
+                  )
+                })}
+              </select>
+              <p className="text-xs text-gray-500 mt-2">
+                Showing SMS-capable sender numbers from your Twilio account.
+              </p>
+            </>
+          ) :
+
+          channel === 'whatsapp' && loadingWhatsappSenders ? (
             <div className="flex items-center justify-center py-8 text-gray-500">
               <RefreshCw className="w-5 h-5 animate-spin mr-2" />
               Loading WhatsApp senders...

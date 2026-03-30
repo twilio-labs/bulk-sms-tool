@@ -50,7 +50,9 @@ const ConversationDetail = ({
     Date.now() - lastInboundTimestampMs > 24 * 60 * 60 * 1000
   )
   const includeUnapprovedTemplates = isWhatsAppConversation && !isOutsideWhatsAppWindow
-  const canFetchTemplates = Boolean(isWhatsAppConversation && twilioConfig?.accountSid && twilioConfig?.authToken)
+  const hasAuthTokenCreds = Boolean(twilioConfig?.accountSid && twilioConfig?.authToken)
+  const hasApiKeyCreds = Boolean(twilioConfig?.accountSid && twilioConfig?.apiKeySid && twilioConfig?.apiKeySecret)
+  const canFetchTemplates = Boolean(isWhatsAppConversation && (hasAuthTokenCreds || hasApiKeyCreds))
 
   useEffect(() => {
     setSendError(null)
@@ -77,6 +79,8 @@ const ConversationDetail = ({
         const fetchedTemplates = await getContentTemplates({
           accountSid: twilioConfig.accountSid,
           authToken: twilioConfig.authToken,
+          apiKeySid: twilioConfig.apiKeySid,
+          apiKeySecret: twilioConfig.apiKeySecret,
           includeUnapproved: includeUnapprovedTemplates,
         })
 
@@ -99,7 +103,7 @@ const ConversationDetail = ({
     return () => {
       isCancelled = true
     }
-  }, [canFetchTemplates, includeUnapprovedTemplates, twilioConfig?.accountSid, twilioConfig?.authToken])
+  }, [canFetchTemplates, includeUnapprovedTemplates, twilioConfig?.accountSid, twilioConfig?.authToken, twilioConfig?.apiKeySid, twilioConfig?.apiKeySecret])
 
   useEffect(() => {
     if (!selectedTemplateSid) {
@@ -244,6 +248,29 @@ const ConversationDetail = ({
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
+  const formatMessageDateIfBeforeToday = (timestamp) => {
+    const date = new Date(timestamp)
+    if (Number.isNaN(date.getTime())) {
+      return null
+    }
+
+    const now = new Date()
+    const isToday =
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() === now.getDate()
+
+    if (isToday) {
+      return null
+    }
+
+    return date.toLocaleDateString([], {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    })
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -283,6 +310,11 @@ const ConversationDetail = ({
               >
                 <p className="break-words whitespace-pre-wrap">{message.text}</p>
                 <div className="flex items-center gap-1 mt-1 text-xs">
+                  {formatMessageDateIfBeforeToday(message.timestamp) && (
+                    <span className={message.direction === MESSAGE_DIRECTION.OUTBOUND ? 'text-blue-50' : 'text-gray-600'}>
+                      {formatMessageDateIfBeforeToday(message.timestamp)}
+                    </span>
+                  )}
                   <span className={message.direction === MESSAGE_DIRECTION.OUTBOUND ? 'text-blue-50' : 'text-gray-600'}>
                     {formatMessageTime(message.timestamp)}
                   </span>

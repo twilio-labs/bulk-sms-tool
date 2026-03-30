@@ -287,25 +287,43 @@ export const useConversations = () => {
   }, [])
 
   const subscribeViaServer = useCallback(async (conversationSid) => {
-    if (!conversationSid || !twilioConfigRef.current?.accountSid || !twilioConfigRef.current?.authToken || !realtimeIdentity) {
+    const hasAuthTokenCreds = Boolean(twilioConfigRef.current?.accountSid && twilioConfigRef.current?.authToken)
+    const hasApiKeyCreds = Boolean(
+      twilioConfigRef.current?.accountSid &&
+      twilioConfigRef.current?.apiKeySid &&
+      twilioConfigRef.current?.apiKeySecret
+    )
+
+    if (!conversationSid || (!hasAuthTokenCreds && !hasApiKeyCreds) || !realtimeIdentity) {
       return false
     }
 
-    const subscribeUrl = API_ENDPOINTS.CONVERSATION_SUBSCRIBE.replace(':conversationSid', encodeURIComponent(conversationSid))
-    const response = await fetch(subscribeUrl, {
+    const response = await fetch(API_ENDPOINTS.CONVERSATION_SUBSCRIBE, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
+        conversationSid,
         twilioConfig: twilioConfigRef.current,
         identity: realtimeIdentity,
       }),
     })
 
     if (!response.ok) {
-      const errBody = await response.json().catch(() => ({}))
-      throw new Error(errBody.error || 'Failed to subscribe to conversation')
+      const responseText = await response.text().catch(() => '')
+      let errorMessage = ''
+
+      if (responseText) {
+        try {
+          const parsed = JSON.parse(responseText)
+          errorMessage = parsed?.error || ''
+        } catch {
+          errorMessage = responseText.trim()
+        }
+      }
+
+      throw new Error(errorMessage || `Failed to subscribe to conversation (HTTP ${response.status})`)
     }
 
     return true
@@ -460,7 +478,6 @@ export const useConversations = () => {
 
     try {
       const conversation = await ensureConversationAccess(conversationSid)
-
       const detail = await mapConversationDetail(conversation)
 
       // Only commit result if this is still the latest selected conversation.

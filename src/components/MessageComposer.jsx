@@ -25,7 +25,9 @@ const MessageComposer = ({
     ? Object.keys(contacts[0]).filter(key => !['id', 'status'].includes(key))
     : []
 
-  const canFetchTemplates = isWhatsApp && twilioConfig?.accountSid && twilioConfig?.authToken
+  const hasAuthTokenCreds = Boolean(twilioConfig?.accountSid && twilioConfig?.authToken)
+  const hasApiKeyCreds = Boolean(twilioConfig?.accountSid && twilioConfig?.apiKeySid && twilioConfig?.apiKeySecret)
+  const canFetchTemplates = isWhatsApp && (hasAuthTokenCreds || hasApiKeyCreds)
 
   const variableKeys = useMemo(
     () => Object.keys(contentTemplate?.variables || {}),
@@ -44,6 +46,8 @@ const MessageComposer = ({
       const fetchedTemplates = await getContentTemplates({
         accountSid: twilioConfig.accountSid,
         authToken: twilioConfig.authToken,
+        apiKeySid: twilioConfig.apiKeySid,
+        apiKeySecret: twilioConfig.apiKeySecret,
         includeUnapproved: includeUnapprovedTemplates,
       })
 
@@ -59,7 +63,7 @@ const MessageComposer = ({
     if (canFetchTemplates) {
       fetchTemplates()
     }
-  }, [twilioConfig?.accountSid, twilioConfig?.authToken, senderConfig?.channel, includeUnapprovedTemplates])
+  }, [twilioConfig?.accountSid, twilioConfig?.authToken, twilioConfig?.apiKeySid, twilioConfig?.apiKeySecret, senderConfig?.channel, includeUnapprovedTemplates])
 
   useEffect(() => {
     if (!isWhatsApp && contentTemplate) {
