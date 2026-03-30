@@ -3,23 +3,25 @@ import { SMS_SETTINGS_DEFAULTS, DELAY_SETTINGS } from '../utils/constants'
 
 export const useSettings = () => {
   const [smsSettings, setSmsSettings] = useState(SMS_SETTINGS_DEFAULTS)
-  
-  // Initialize Twilio config with empty values (no persistence)
+
   const [twilioConfig, setTwilioConfig] = useState({
     accountSid: '',
-    authToken: ''
+    authToken: '',
+    apiKeySid: '',
+    apiKeySecret: '',
+    conversationServiceSid: ''
   })
 
-  // Initialize sender configuration
   const [senderConfig, setSenderConfig] = useState({
-    channel: 'sms', // 'sms' or 'whatsapp'
-    type: 'phone', // 'phone' or 'messaging-service'
+    channel: 'sms',
+    type: 'phone',
     phoneNumber: '',
     messagingServiceSid: ''
   })
   
   const [showSettings, setShowSettings] = useState(false)
   const [selectedCountry, setSelectedCountry] = useState('US')
+  const [replyHandlingEnabled, setReplyHandlingEnabled] = useState(false)
 
   const updateSmsSettings = useCallback((newSettings) => {
     setSmsSettings(prev => ({ ...prev, ...newSettings }))
@@ -37,6 +39,10 @@ export const useSettings = () => {
 
   const updateTwilioConfig = useCallback((newConfig) => {
     setTwilioConfig(prev => ({ ...prev, ...newConfig }))
+  }, [])
+
+  const updateReplyHandlingEnabled = useCallback((enabled) => {
+    setReplyHandlingEnabled(Boolean(enabled))
   }, [])
 
   const validateTwilioConfig = useCallback(() => {
@@ -95,7 +101,10 @@ export const useSettings = () => {
   const clearTwilioConfig = useCallback(() => {
     setTwilioConfig({
       accountSid: '',
-      authToken: ''
+      authToken: '',
+      apiKeySid: '',
+      apiKeySecret: '',
+      conversationServiceSid: ''
     })
 
     setSenderConfig({
@@ -104,6 +113,8 @@ export const useSettings = () => {
       phoneNumber: '',
       messagingServiceSid: ''
     })
+
+    setReplyHandlingEnabled(false)
   }, [])
 
   const handleCountryChange = useCallback((countryCode) => {
@@ -148,9 +159,11 @@ export const useSettings = () => {
     twilioConfig,
     senderConfig,
     showSettings,
+    replyHandlingEnabled,
     selectedCountry,
     updateSmsSettings,
     updateTwilioConfig,
+    updateReplyHandlingEnabled,
     updateSenderConfig,
     updateMessageDelay,
     validateTwilioConfig,

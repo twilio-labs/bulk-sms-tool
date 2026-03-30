@@ -16,9 +16,12 @@ import ContactsSection from './components/ContactsSection'
 import MessageSection from './components/MessageSection'
 import AnalyticsSection from './components/AnalyticsSection'
 import SendingSection from './components/SendingSection'
+import RepliesTabSection from './components/RepliesTabSection'
+import { MessageCircle, Send } from 'lucide-react'
 
 function App() {
   // Local state
+  const [activeTab, setActiveTab] = useState('bulk')
   const [message, setMessage] = useState('')
   const [contentTemplate, setContentTemplate] = useState(null)
   const [smsPricingCountry, setSmsPricingCountry] = useState('US')
@@ -128,27 +131,76 @@ function App() {
     }
   }, [isConfigurationComplete, contactsHook.contacts.length, validationSummary.summary.valid, isMessageConfigured, canSend])
 
+  const sectionEnabled = useMemo(() => {
+    return {
+      settings: true,
+      contacts: true,
+      message: true,
+      analytics: true,
+      sending: true
+    }
+  }, [])
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
         
         <AppHeader />
 
-        {/* Main Layout with Sidebar */}
-        <div className="flex h-[calc(100vh-theme(spacing.20))]">
-          {/* Navigation Sidebar */}
-          <Navigation 
-            activeSection={activeSection}
-            onSectionChange={handleSectionChange}
-            sectionStatus={sectionStatus}
-            onReset={handleReset}
-          />
-          
-          {/* Main Content Area */}
-          <div className="flex-1 overflow-y-auto">
-            <div className="container mx-auto px-6 py-8 max-w-4xl">
-              
-              {/* Render Active Section */}
-              {activeSection === 'settings' && (
+        <div className="w-full pt-4 border-b border-gray-200">
+          <div className="px-6">
+              <div className="flex items-center gap-2">
+              <button
+                onClick={() => setActiveTab('bulk')}
+                role="tab"
+                aria-selected={activeTab === 'bulk'}
+                  className={`relative inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold transition-colors ${
+                  activeTab === 'bulk'
+                      ? 'text-red-700'
+                      : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Send className="w-4 h-4" />
+                  Bulk
+                </span>
+                  {activeTab === 'bulk' && <span className="absolute left-0 right-0 bottom-0 h-0.5 bg-red-600" />}
+              </button>
+              <button
+                  onClick={() => setActiveTab('replies')}
+                role="tab"
+                aria-selected={activeTab === 'replies'}
+                  className={`relative inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold transition-colors ${
+                    activeTab === 'replies'
+                      ? 'text-red-700'
+                      : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <MessageCircle className="w-4 h-4" />
+                  Replies
+                  <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-orange-700 bg-orange-100 border border-orange-200 rounded-full">
+                    Beta
+                  </span>
+                </span>
+                  {activeTab === 'replies' && <span className="absolute left-0 right-0 bottom-0 h-0.5 bg-red-600" />}
+              </button>
+              </div>
+          </div>
+        </div>
+
+        {activeTab === 'bulk' && (
+          <div className="flex h-[calc(100vh-theme(spacing.20)-theme(spacing.16))]">
+            <Navigation 
+              activeSection={activeSection}
+              onSectionChange={handleSectionChange}
+              sectionStatus={sectionStatus}
+              sectionEnabled={sectionEnabled}
+              onReset={handleReset}
+            />
+
+            <div className="flex-1 overflow-y-auto">
+              <div className="container mx-auto px-6 py-8 max-w-4xl">
+                {activeSection === 'settings' && (
                 <SettingsSection
                   isExpanded={true}
                   onToggle={() => {}}
@@ -238,10 +290,23 @@ function App() {
                   formatEstimatedTime={settingsHook.formatEstimatedTime}
                 />
               )}
-              
+
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {activeTab === 'replies' && (
+          <div className="h-[calc(100vh-theme(spacing.20)-theme(spacing.16))] overflow-hidden">
+            <RepliesTabSection
+              twilioConfig={settingsHook.twilioConfig}
+              senderConfig={settingsHook.senderConfig}
+              replyHandlingEnabled={settingsHook.replyHandlingEnabled}
+              updateReplyHandlingEnabled={settingsHook.updateReplyHandlingEnabled}
+              updateTwilioConfig={settingsHook.updateTwilioConfig}
+            />
+          </div>
+        )}
     </div>
   )
 }
