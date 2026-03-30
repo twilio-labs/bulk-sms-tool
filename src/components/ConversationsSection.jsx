@@ -76,9 +76,12 @@ const ConversationsSection = ({ twilioConfig, senderConfig }) => {
       setupConversations()
     }
 
+    // Only disconnect on unmount, not on config changes
     return () => {
-      disconnectRealtime()
-      initializedConfigKeyRef.current = null
+      if (!twilioConfig?.accountSid) {
+        disconnectRealtime()
+        initializedConfigKeyRef.current = null
+      }
     }
   }, [twilioConfig?.accountSid, twilioConfig?.apiKeySid, twilioConfig?.apiKeySecret, twilioConfig?.conversationServiceSid, initializeRealtime, disconnectRealtime])
 

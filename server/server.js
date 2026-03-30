@@ -27,7 +27,7 @@ app.use('/api/', limiter);
 
 const conversationsTokenLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 30,
+  max: 100, // Increased from 30 to 100 for development
   message: 'Too many realtime token requests. Please wait a moment and try again.',
 });
 

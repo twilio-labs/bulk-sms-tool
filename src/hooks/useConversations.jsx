@@ -217,7 +217,16 @@ export const useConversations = () => {
     const unreadCount = Number.isFinite(unreadCountRaw) ? unreadCountRaw : 0
 
     const messages = collected.map((message) => {
-      const outbound = message.author === realtimeIdentity
+      // Check if message is outbound by comparing author with:
+      // 1. Realtime identity (chat participant)
+      // 2. Phone number in the address (for non-chat participants like SMS/WhatsApp that match our participant)
+      const authorMatchesIdentity = message.author === realtimeIdentity
+      const authorMatchesPhone = participantData.phone && message.author && 
+        message.author.replace(/^whatsapp:/i, '').trim() === participantData.phone.replace(/^whatsapp:/i, '').trim()
+      
+      // Message is outbound if author matches our identity OR doesn't match the contact's phone
+      // (If author is not the contact's phone and not empty, it's from us)
+      const outbound = authorMatchesIdentity || (!authorMatchesPhone && message.author && message.author !== 'system')
 
       return {
         id: message.sid || String(message.index),
