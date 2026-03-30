@@ -5,6 +5,7 @@ const Navigation = ({
   activeSection, 
   onSectionChange,
   sectionStatus = {},
+  sectionEnabled = {},
   onReset // Reset function passed from parent
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false)
@@ -80,14 +81,19 @@ const Navigation = ({
               const Icon = item.icon
               const isActive = activeSection === item.id
               const isComplete = sectionStatus[item.id] || false
+              const isEnabled = sectionEnabled[item.id] !== false
               
               return (
                 <button
                   key={item.id}
-                  onClick={() => onSectionChange(item.id)}
+                  onClick={() => isEnabled && onSectionChange(item.id)}
+                  disabled={!isEnabled}
                   className={`w-full flex items-center rounded-lg text-left transition-colors ${
                     isCollapsed ? 'px-2 py-3 justify-center' : 'px-3 py-3'
                   } ${
+                    !isEnabled
+                      ? 'text-gray-400 bg-gray-50 cursor-not-allowed'
+                      :
                     isActive
                       ? isComplete 
                         ? 'bg-green-50 text-green-700 border border-green-200'

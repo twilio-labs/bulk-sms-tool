@@ -28,6 +28,24 @@ export const CONTACT_STATUS = {
   FAILED: 'failed',
 }
 
+export const MESSAGE_STATUS = {
+  SENT: 'sent',
+  DELIVERED: 'delivered',
+  READ: 'read',
+  FAILED: 'failed',
+  PENDING: 'pending',
+}
+
+export const MESSAGE_DIRECTION = {
+  INBOUND: 'inbound',
+  OUTBOUND: 'outbound',
+}
+
+export const CHANNEL_TYPE = {
+  SMS: 'sms',
+  WHATSAPP: 'whatsapp',
+}
+
 export const API_ENDPOINTS = {
   SEND_BULK_SMS: '/api/send-bulk-sms',
   SCHEDULE_SMS: '/api/schedule-sms',
@@ -36,4 +54,11 @@ export const API_ENDPOINTS = {
   WHATSAPP_RATE_CARDS: '/api/whatsapp-rate-cards',
   SCHEDULED_JOBS: '/api/scheduled-jobs',
   JOB_RESULTS: '/api/job-results',
+  CONVERSATIONS: '/api/conversations',
+  CONVERSATIONS_TOKEN: '/api/conversations-token',
+  CONVERSATION_SUBSCRIBE: '/api/conversations/:conversationSid/subscribe',
+  INCOMING_MESSAGE: '/api/incoming-message',
+  SEND_REPLY: '/api/send-reply',
+  SEND_TEMPLATE_REPLY: '/api/send-reply-template',
+  MESSAGE_STATUS: '/api/message-status',
 }

@@ -11,6 +11,7 @@
     "install:all": "npm install && cd server && npm install"
   },
   "dependencies": {
+    "@twilio/conversations": "^2.6.3",
     "@tailwindcss/vite": "^4.2.1",
     "lucide-react": "^0.577.0",
     "papaparse": "^5.5.3",
