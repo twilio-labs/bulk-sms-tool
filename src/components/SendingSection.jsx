@@ -6,8 +6,13 @@ const SendingSection = ({
   isExpanded,
   onToggle,
   canSend,
+  isMessageConfigured,
+  contentTemplate,
   message,
   contacts,
+  getMessageAnalytics,
+  smsPricingCountry,
+  whatsAppPricingCountry,
   twilioConfig,
   senderConfig,
   onSendMessages,
@@ -49,8 +54,13 @@ const SendingSection = ({
       </div>
 
       <SendingPanel
+        isMessageConfigured={isMessageConfigured}
+        contentTemplate={contentTemplate}
         message={message}
         contacts={contacts}
+        getMessageAnalytics={getMessageAnalytics}
+        smsPricingCountry={smsPricingCountry}
+        whatsAppPricingCountry={whatsAppPricingCountry}
         twilioConfig={twilioConfig}
         senderConfig={senderConfig}
         canSend={canSend}

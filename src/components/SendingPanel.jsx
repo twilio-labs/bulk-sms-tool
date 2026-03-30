@@ -1,11 +1,23 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Send, Clock, Calendar, Users, DollarSign, AlertTriangle, CheckCircle } from 'lucide-react'
 import ScheduleSuccessModal from './ScheduleSuccessModal'
+import { getSmsPricing, getWhatsAppRateCards } from '../services/smsService'
+import {
+  calculateSmsEstimatedTotal,
+  calculateWhatsAppEstimatedTotal,
+  normalizeWhatsAppTemplateCategory,
+  personalizeMessageWithFirstContact,
+} from '../utils/pricingUtils'
 import { getScheduledTimeValidationError, SCHEDULE_CONSTRAINTS } from '../utils/dateUtils'
 
 const SendingPanel = ({ 
+  isMessageConfigured = false,
+  contentTemplate = null,
   message, 
   contacts, 
+  getMessageAnalytics,
+  smsPricingCountry = 'US',
+  whatsAppPricingCountry = 'US',
   twilioConfig,
   senderConfig,
   canSend = false,
@@ -23,8 +35,99 @@ const SendingPanel = ({
   const [sendingMode, setSendingMode] = useState('immediate')
   const [isProcessing, setIsProcessing] = useState(false)
   const [showSuccessModal, setShowSuccessModal] = useState(false)
+  const [smsEstimatedRate, setSmsEstimatedRate] = useState(null)
+  const [whatsAppRateCards, setWhatsAppRateCards] = useState([])
+  const [whatsAppTwilioFee, setWhatsAppTwilioFee] = useState(0.005)
+  const isTemplateMode = !!contentTemplate?.contentSid
+  const isWhatsAppChannel = senderConfig?.channel === 'whatsapp'
+  const contactCount = contacts?.length || 0
 
-  const estimatedCost = (contacts?.length || 0) * 0.0075 // Base cost estimation
+  const analytics = getMessageAnalytics
+    ? getMessageAnalytics(personalizeMessageWithFirstContact(message, contacts))
+    : null
+  const smsSegments = analytics?.segments || 1
+
+  useEffect(() => {
+    if (isWhatsAppChannel) {
+      setSmsEstimatedRate(null)
+      return
+    }
+
+    if (!twilioConfig?.accountSid || !twilioConfig?.authToken) {
+      setSmsEstimatedRate(null)
+      return
+    }
+
+    const loadSmsRate = async () => {
+      try {
+        const pricing = await getSmsPricing({
+          accountSid: twilioConfig.accountSid,
+          authToken: twilioConfig.authToken,
+          countryCode: smsPricingCountry,
+        })
+
+        const rate = typeof pricing?.estimatedOutboundPrice === 'number' ? pricing.estimatedOutboundPrice : null
+        setSmsEstimatedRate(rate)
+      } catch {
+        setSmsEstimatedRate(null)
+      }
+    }
+
+    loadSmsRate()
+  }, [isWhatsAppChannel, twilioConfig?.accountSid, twilioConfig?.authToken, smsPricingCountry])
+
+  useEffect(() => {
+    if (!isWhatsAppChannel) {
+      return
+    }
+
+    const loadWhatsAppRates = async () => {
+      try {
+        const response = await getWhatsAppRateCards()
+        const countries = Array.isArray(response?.countries) ? response.countries : []
+        setWhatsAppRateCards(countries)
+        if (typeof response?.twilioFeePerMessage === 'number') {
+          setWhatsAppTwilioFee(response.twilioFeePerMessage)
+        }
+      } catch {
+        setWhatsAppRateCards([])
+      }
+    }
+
+    loadWhatsAppRates()
+  }, [isWhatsAppChannel])
+
+  const estimatedCost = useMemo(() => {
+    if (isWhatsAppChannel) {
+      const selectedTemplateCategory = normalizeWhatsAppTemplateCategory(contentTemplate?.whatsappCategory)
+      const { totalCost } = calculateWhatsAppEstimatedTotal({
+        rateCards: whatsAppRateCards,
+        countryCode: whatsAppPricingCountry,
+        templateCategory: selectedTemplateCategory,
+        twilioFeePerMessage: whatsAppTwilioFee,
+        contactCount,
+      })
+
+      return totalCost ?? 0
+    }
+
+    const { totalCost } = calculateSmsEstimatedTotal({
+      estimatedRate: smsEstimatedRate,
+      segments: smsSegments,
+      contactCount,
+    })
+
+    return totalCost
+  }, [
+    isWhatsAppChannel,
+    contentTemplate?.whatsappCategory,
+    whatsAppRateCards,
+    whatsAppPricingCountry,
+    whatsAppTwilioFee,
+    contactCount,
+    smsEstimatedRate,
+    smsSegments,
+  ])
   const hasMessagingServiceConfigured = senderConfig?.type === 'messaging-service' && Boolean(senderConfig?.messagingServiceSid)
   const scheduleWindowError = getScheduledTimeValidationError(
     scheduledSending?.scheduledDate,
@@ -188,18 +291,22 @@ const SendingPanel = ({
             <div className="flex items-center justify-center mb-2">
               <Send className="w-5 h-5 text-green-500" />
             </div>
-            <div className="text-2xl font-bold text-green-600">{message.length}</div>
-            <div className="text-sm text-gray-600">Characters</div>
+            <div className="text-2xl font-bold text-green-600">{isTemplateMode ? 'TPL' : message.length}</div>
+            <div className="text-sm text-gray-600">{isTemplateMode ? 'Template' : 'Characters'}</div>
           </div>
           
           <div className="bg-purple-50 rounded-lg p-3 text-center">
             <div className="flex items-center justify-center mb-2">
               <DollarSign className="w-5 h-5 text-purple-500" />
             </div>
-            <div className="text-2xl font-bold text-purple-600">${estimatedCost.toFixed(2)}</div>
+            <div className="text-2xl font-bold text-purple-600">${estimatedCost.toFixed(4)}</div>
             <div className="text-sm text-gray-600">Est. Cost</div>
           </div>
         </div>
+
+        <p className="text-xs text-gray-500 mb-4">
+          Based on {isWhatsAppChannel ? `WhatsApp ${whatsAppPricingCountry}` : `SMS ${smsPricingCountry}`} pricing selection from Analytics.
+        </p>
 
         {/* Readiness Checks */}
         <div className="space-y-2">
@@ -208,10 +315,10 @@ const SendingPanel = ({
             <span>{canSend ? 'All requirements met' : 'Requirements not met'}</span>
           </div>
           
-          {!canSend && !message.trim() && (
+          {!canSend && !isMessageConfigured && (
             <div className="flex items-center text-sm text-red-600">
               <AlertTriangle className="w-4 h-4 mr-2" />
-              <span>Message is required</span>
+              <span>{isTemplateMode ? 'Template variables are incomplete' : 'Message is required'}</span>
             </div>
           )}
           

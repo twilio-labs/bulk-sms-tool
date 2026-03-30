@@ -20,6 +20,9 @@ import SendingSection from './components/SendingSection'
 function App() {
   // Local state
   const [message, setMessage] = useState('')
+  const [contentTemplate, setContentTemplate] = useState(null)
+  const [smsPricingCountry, setSmsPricingCountry] = useState('US')
+  const [whatsAppPricingCountry, setWhatsAppPricingCountry] = useState('US')
 
   // Custom hooks
   const contactsHook = useContacts()
@@ -42,6 +45,7 @@ function App() {
     
     // Clear message
     setMessage('')
+    setContentTemplate(null)
     
     // Clear SMS results and reset sending state
     smsHook.resetSendingState()
@@ -54,6 +58,9 @@ function App() {
 
   // Computed values
   const validationSummary = contactsHook.getValidationSummary()
+  const isWhatsAppChannel = settingsHook.senderConfig.channel === 'whatsapp'
+  const isTemplateConfigured = !!contentTemplate?.contentSid && Object.values(contentTemplate?.variables || {}).every(value => String(value).trim().length > 0)
+  const isMessageConfigured = isWhatsAppChannel ? isTemplateConfigured : !!message.trim()
   
   // Simple send handler
   const handleSendSMS = async () => {
@@ -65,8 +72,10 @@ function App() {
       return
     }
     
-    if (!message.trim() || validationSummary.summary.valid === 0) {
-      alert('Please enter a message and upload valid contacts')
+    if (!isMessageConfigured || validationSummary.summary.valid === 0) {
+      alert(isWhatsAppChannel
+        ? 'Please select a valid WhatsApp template, complete all template variables, and upload valid contacts'
+        : 'Please enter a message and upload valid contacts')
       return
     }
     
@@ -74,6 +83,7 @@ function App() {
       await smsHook.sendBulkMessages({
         contacts: contactsHook.contacts,
         message: message,
+        contentTemplate,
         twilioConfig: settingsHook.twilioConfig,
         senderConfig: settingsHook.senderConfig,
         onContactUpdate: contactsHook.updateContactStatus,
@@ -89,9 +99,10 @@ function App() {
   const handleScheduleMessages = useCallback(async (params) => {
     return await schedulerHook.scheduleMessage({
       ...params,
+      contentTemplate,
       messageDelay: settingsHook.smsSettings.messageDelay
     })
-  }, [schedulerHook.scheduleMessage, settingsHook.smsSettings.messageDelay])
+  }, [schedulerHook.scheduleMessage, contentTemplate, settingsHook.smsSettings.messageDelay])
 
   // Check if configurations are complete
   const isConfigurationComplete = useMemo(() => {
@@ -104,18 +115,18 @@ function App() {
     }
   }, [settingsHook.twilioConfig, settingsHook.senderConfig, settingsHook.validateTwilioConfig, settingsHook.validateSenderConfig])
   
-  const canSend = isConfigurationComplete && message.trim() && validationSummary.summary.valid > 0
+  const canSend = isConfigurationComplete && isMessageConfigured && validationSummary.summary.valid > 0
 
   // Calculate section completion status
   const sectionStatus = useMemo(() => {
     return {
       settings: isConfigurationComplete,
       contacts: contactsHook.contacts.length > 0 && validationSummary.summary.valid > 0,
-      message: message.trim().length > 0,
-      analytics: message.trim().length > 0 && contactsHook.contacts.length > 0,
+      message: isMessageConfigured,
+      analytics: isMessageConfigured && contactsHook.contacts.length > 0,
       sending: canSend
     }
-  }, [isConfigurationComplete, contactsHook.contacts.length, validationSummary.summary.valid, message, canSend])
+  }, [isConfigurationComplete, contactsHook.contacts.length, validationSummary.summary.valid, isMessageConfigured, canSend])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
@@ -172,6 +183,10 @@ function App() {
                   contacts={contactsHook.contacts}
                   validationSummary={validationSummary}
                   isConfigurationComplete={isConfigurationComplete}
+                  twilioConfig={settingsHook.twilioConfig}
+                  senderConfig={settingsHook.senderConfig}
+                  contentTemplate={contentTemplate}
+                  onContentTemplateChange={setContentTemplate}
                 />
               )}
 
@@ -180,6 +195,11 @@ function App() {
                   isExpanded={true}
                   onToggle={() => {}}
                   message={message}
+                  contentTemplate={contentTemplate}
+                  smsPricingCountry={smsPricingCountry}
+                  onSmsPricingCountryChange={setSmsPricingCountry}
+                  whatsAppPricingCountry={whatsAppPricingCountry}
+                  onWhatsAppPricingCountryChange={setWhatsAppPricingCountry}
                   contacts={contactsHook.contacts}
                   getMessageAnalytics={smsHook.getMessageAnalytics}
                   validationSummary={validationSummary}
@@ -194,8 +214,13 @@ function App() {
                   isExpanded={true}
                   onToggle={() => {}}
                   canSend={canSend}
+                  isMessageConfigured={isMessageConfigured}
+                  contentTemplate={contentTemplate}
                   message={message}
                   contacts={contactsHook.contacts}
+                  getMessageAnalytics={smsHook.getMessageAnalytics}
+                  smsPricingCountry={smsPricingCountry}
+                  whatsAppPricingCountry={whatsAppPricingCountry}
                   twilioConfig={settingsHook.twilioConfig}
                   senderConfig={settingsHook.senderConfig}
                   onSendMessages={handleSendSMS}

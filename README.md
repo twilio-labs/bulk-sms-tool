@@ -1,13 +1,13 @@
-# Bulk SMS Sender
+# Bulk SMS + WhatsApp Sender
 
-A bulk SMS application using Twilio API, built with React and Tailwind CSS.
+A bulk messaging application using Twilio API, built with React and Tailwind CSS.
 
 ## Features
 
 - CSV upload for contact lists
 - Message scheduling and immediate sending
 - Real-time progress tracking
-- Twilio integration with rate limiting
+- Twilio integration for SMS and WhatsApp with rate limiting
 - Responsive design
 
 ## Quick Start
@@ -15,7 +15,8 @@ A bulk SMS application using Twilio API, built with React and Tailwind CSS.
 ### Prerequisites
 
 - Node.js 18+
-- Twilio account (Account SID, Auth Token, phone number)
+- Twilio account (Account SID, Auth Token)
+- Twilio SMS number and/or WhatsApp-enabled sender (Sandbox or approved production sender)
 
 ### Installation
 
@@ -40,9 +41,10 @@ A bulk SMS application using Twilio API, built with React and Tailwind CSS.
 ## Usage
 
 1. Configure Twilio credentials in the app
-2. Upload CSV file with phone numbers
-3. Compose message
-4. Send immediately or schedule for later
+2. Select channel (SMS or WhatsApp) and sender type
+3. Upload CSV file with phone numbers
+4. Compose message or select a WhatsApp Content Template and fill variables
+5. Send immediately or schedule for later
 
 ## Quick Deploy to Vercel
 

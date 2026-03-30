@@ -8,7 +8,7 @@ export const useSMS = () => {
   const [progress, setProgress] = useState(0)
   const [results, setResults] = useState({ success: 0, failed: 0, errors: [] })
 
-  const sendBulkMessages = useCallback(async ({ contacts, message, twilioConfig, senderConfig, onContactUpdate, messageDelay = 1000 }) => {
+  const sendBulkMessages = useCallback(async ({ contacts, message, contentTemplate = null, twilioConfig, senderConfig, onContactUpdate, messageDelay = 1000 }) => {
     setSending(true)
     setProgress(0)
     setResults({ success: 0, failed: 0, errors: [] })
@@ -28,8 +28,10 @@ export const useSMS = () => {
       const response = await sendBulkSMS({
         contacts: validContacts, // Send full contact objects
         message,
+        contentTemplate,
         twilioConfig,
         senderConfig,
+        channel: senderConfig?.channel || 'sms',
         messageDelay
       })
 

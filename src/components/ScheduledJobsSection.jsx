@@ -74,7 +74,7 @@ const ScheduledJobsSection = ({
         <Clock className="h-8 w-8 text-gray-400 mx-auto mb-3" />
         <p className="text-gray-600">No scheduled messages</p>
         <p className="text-sm text-gray-500 mt-1">
-          Scheduled SMS jobs will appear here
+          Scheduled SMS and WhatsApp jobs will appear here
         </p>
       </div>
     )
@@ -149,7 +149,7 @@ const ScheduledJobsSection = ({
                 {/* Recipients Count */}
                 <div className="flex items-center text-sm text-gray-600 mb-2">
                   <Users className="h-4 w-4 mr-2" />
-                  <span>{job.recipients?.length || 0} recipients</span>
+                  <span>{job.recipients?.length || job.contactCount || 0} recipients</span>
                 </div>
 
                 {/* Message Preview */}
@@ -158,6 +158,11 @@ const ScheduledJobsSection = ({
                   <div className="flex-1">
                     <div className="line-clamp-2">
                       {(() => {
+                        if (job.contentTemplate?.contentSid) {
+                          const templateName = job.contentTemplate?.friendlyName || job.contentTemplate?.contentSid
+                          return `Template: ${templateName}`
+                        }
+
                         // Replace variables with first contact's data for preview
                         if (job.recipients && job.recipients.length > 0) {
                           const firstContact = job.recipients[0]
