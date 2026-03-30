@@ -360,8 +360,16 @@ const SendingPanel = ({
           <div className="flex justify-between text-sm text-gray-600">
             <span>{Math.round(progress)}% complete</span>
             {results && (
-              <span>
-                {results.success || 0} sent, {results.failed || 0} failed
+              <span className="text-right">
+                {results.success || 0} sent, {results.failed || 0} failed{' '}
+                <a
+                  href="https://console.twilio.com/us1/monitor/logs/sms"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline text-blue-600 hover:text-blue-700"
+                >
+                  More details
+                </a>
               </span>
             )}
           </div>

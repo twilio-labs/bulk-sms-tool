@@ -6,6 +6,7 @@ const SenderConfiguration = ({
   senderConfig, 
   updateSenderConfig 
 }) => {
+  const WHATSAPP_SANDBOX_NUMBER = '+14155238886'
   const [channel, setChannel] = useState(senderConfig?.channel || 'sms')
   const [senderType, setSenderType] = useState(senderConfig?.type || 'phone')
   const [messagingServices, setMessagingServices] = useState([])
@@ -134,6 +135,10 @@ const SenderConfiguration = ({
 
   // Check if Twilio credentials are configured
   const hasCredentials = twilioConfig?.accountSid && twilioConfig?.authToken
+  const isWhatsAppSandboxSelected =
+    channel === 'whatsapp' &&
+    senderType === 'phone' &&
+    senderConfig?.phoneNumber === WHATSAPP_SANDBOX_NUMBER
 
   return (
     <div className="space-y-6">
@@ -252,14 +257,12 @@ const SenderConfiguration = ({
                 <option value="">Select an approved WhatsApp sender</option>
                 {[...whatsappSenders]
                   .sort((a, b) => {
-                    const SANDBOX = '+14155238886'
-                    if (a.phoneNumber === SANDBOX) return 1
-                    if (b.phoneNumber === SANDBOX) return -1
+                    if (a.phoneNumber === WHATSAPP_SANDBOX_NUMBER) return 1
+                    if (b.phoneNumber === WHATSAPP_SANDBOX_NUMBER) return -1
                     return 0
                   })
                   .map((sender) => {
-                    const SANDBOX = '+14155238886'
-                    const isSandbox = sender.phoneNumber === SANDBOX
+                    const isSandbox = sender.phoneNumber === WHATSAPP_SANDBOX_NUMBER
                     const label = isSandbox
                       ? `${sender.phoneNumber} — Sandbox Sender`
                       : sender.friendlyName !== sender.phoneNumber
@@ -275,6 +278,20 @@ const SenderConfiguration = ({
               <p className="text-xs text-gray-500 mt-2">
                 Showing approved WhatsApp senders from your Twilio account. The app will automatically send using the whatsapp: prefix.
               </p>
+              {isWhatsAppSandboxSelected && (
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-3 mt-3">
+                  You selected the Twilio WhatsApp Sandbox sender. All recipients must first join your sandbox before they can receive messages.{' '}
+                  <a
+                    href="https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn?frameUrl=%2Fconsole%2Fsms%2Fwhatsapp%2Flearn%3Fx-target-region%3Dus1"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline font-medium"
+                  >
+                    Manage sandbox join instructions in Twilio Console
+                  </a>
+                  .
+                </p>
+              )}
             </>
           ) : (
             <>
