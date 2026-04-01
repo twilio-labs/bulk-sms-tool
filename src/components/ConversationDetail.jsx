@@ -41,8 +41,25 @@ const ConversationDetail = ({
   const isWhatsAppConversation =
     conversation?.channel === CHANNEL_TYPE.WHATSAPP ||
     conversationChannelFallback === CHANNEL_TYPE.WHATSAPP
+  const normalizeAddress = (value) => String(value || '').replace(/^whatsapp:/i, '').trim().toLowerCase()
+  const isPhoneLikeAddress = (value) => /^\+[1-9]\d{1,14}$/.test(normalizeAddress(value))
+  const contactPhone = normalizeAddress(conversation?.phone)
   const lastInboundMessage = Array.isArray(conversation?.messages)
-    ? [...conversation.messages].reverse().find((message) => message.direction === MESSAGE_DIRECTION.INBOUND)
+    ? [...conversation.messages].reverse().find((message) => {
+      const author = normalizeAddress(message?.author)
+
+      if (author === 'system') {
+        return false
+      }
+
+      if (contactPhone && author) {
+        return author === contactPhone
+      }
+
+      // Fallback for threads where contact phone is unknown: only trust inbound
+      // authors that look like real phone addresses, never SIDs/identities.
+      return message?.direction === MESSAGE_DIRECTION.INBOUND && isPhoneLikeAddress(author)
+    })
     : null
   const lastInboundTimestampMs = new Date(lastInboundMessage?.timestamp || 0).getTime()
   const isOutsideWhatsAppWindow = isWhatsAppConversation && (

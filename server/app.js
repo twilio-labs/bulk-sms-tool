@@ -301,42 +301,77 @@ app.post('/api/content-templates', async (req, res) => {
     const client = hasApiKeyCreds
       ? twilio(apiKeySid, apiKeySecret, { accountSid })
       : twilio(accountSid, authToken);
-    const templates = await client.content.v2.contents.list({ limit: 200 });
+    let normalizedTemplates = [];
 
-    const normalizedTemplates = templates
-      .map((template) => {
-        const types = (template?.types && typeof template.types === 'object') ? template.types : {};
-        const typeKeys = Object.keys(types);
-        const hasSupportedType = typeKeys.some((key) => {
-          const normalizedKey = key.toLowerCase();
-          return normalizedKey.startsWith('twilio/') || normalizedKey.includes('whatsapp');
+    try {
+      // Match the legacy behavior that correctly returned approved templates.
+      const contentAndApprovals = await client.content.v1.contentAndApprovals.list({ limit: 200 });
+
+      normalizedTemplates = (contentAndApprovals || [])
+        .map((template) => {
+          const types = (template?.types && typeof template.types === 'object') ? template.types : {};
+          const approval = template?.approvalRequests && typeof template.approvalRequests === 'object'
+            ? template.approvalRequests
+            : null;
+          const approvalStatus = approval?.status ? String(approval.status).toLowerCase() : null;
+
+          return {
+            sid: template.sid,
+            friendlyName: template.friendlyName,
+            language: template.language || 'en',
+            variables: parseTemplateVariables(template.variables),
+            types,
+            dateCreated: template.dateCreated,
+            dateUpdated: template.dateUpdated,
+            whatsappApprovalStatus: approvalStatus,
+            whatsappCategory: (approval?.category || inferWhatsAppCategory(template) || 'marketing').toLowerCase(),
+          };
+        })
+        .filter((template) => Object.keys(template.types || {}).length > 0)
+        .filter((template) => {
+          if (includeUnapprovedTemplates) {
+            return true;
+          }
+
+          return template.whatsappApprovalStatus === 'approved';
         });
-        const hasWhatsAppType = typeKeys.some((key) => key.toLowerCase().includes('whatsapp'));
+    } catch {
+      // Fallback for accounts where contentAndApprovals is unavailable.
+      const templates = await client.content.v2.contents.list({ limit: 200 });
 
-        const whatsappApprovalStatusRaw = extractWhatsAppApprovalStatus(template);
-        const whatsappApprovalStatus = whatsappApprovalStatusRaw ? String(whatsappApprovalStatusRaw).toLowerCase() : null;
+      normalizedTemplates = templates
+        .map((template) => {
+          const types = (template?.types && typeof template.types === 'object') ? template.types : {};
+          const typeKeys = Object.keys(types);
+          const hasSupportedType = typeKeys.some((key) => {
+            const normalizedKey = key.toLowerCase();
+            return normalizedKey.startsWith('twilio/') || normalizedKey.includes('whatsapp');
+          });
 
-        return {
-          sid: template.sid,
-          friendlyName: template.friendlyName,
-          language: template.language || 'en',
-          variables: parseTemplateVariables(template.variables),
-          types,
-          whatsappCategory: inferWhatsAppCategory(template),
-          whatsappApprovalStatus,
-          hasWhatsAppType,
-          hasSupportedType
-        };
-      })
-      .filter((template) => template.hasSupportedType)
-      .filter((template) => {
-        if (includeUnapprovedTemplates) {
-          return true;
-        }
+          const whatsappApprovalStatusRaw = extractWhatsAppApprovalStatus(template);
+          const whatsappApprovalStatus = whatsappApprovalStatusRaw ? String(whatsappApprovalStatusRaw).toLowerCase() : null;
 
-        return template.whatsappApprovalStatus === 'approved';
-      })
-      .map(({ hasWhatsAppType, hasSupportedType, ...template }) => template);
+          return {
+            sid: template.sid,
+            friendlyName: template.friendlyName,
+            language: template.language || 'en',
+            variables: parseTemplateVariables(template.variables),
+            types,
+            whatsappCategory: inferWhatsAppCategory(template),
+            whatsappApprovalStatus,
+            hasSupportedType,
+          };
+        })
+        .filter((template) => template.hasSupportedType)
+        .filter((template) => {
+          if (includeUnapprovedTemplates) {
+            return true;
+          }
+
+          return template.whatsappApprovalStatus === 'approved';
+        })
+        .map(({ hasSupportedType, ...template }) => template);
+    }
 
     res.json(normalizedTemplates);
   } catch (error) {
@@ -398,79 +433,35 @@ app.post('/api/whatsapp-senders', async (req, res) => {
     }
 
     const client = twilio(accountSid, authToken);
-    const senderMap = new Map();
+    const senders = await client.messaging.v2.channelsSenders.list({
+      channel: 'whatsapp',
+      limit: 1000,
+    });
 
-    // Prefer channel senders attached to messaging services because they explicitly
-    // represent approved channel identities (including WhatsApp senders).
-    const services = await client.messaging.v1.services.list({ limit: 200 });
+    const formattedSenders = senders.map((sender) => {
+      const rawSenderId = sender?.senderId || '';
+      const phoneNumber = String(rawSenderId).replace(/^whatsapp:/i, '').trim();
 
-    for (const service of services) {
-      try {
-        const channelSenders = await client.messaging.v1.services(service.sid).channelSenders.list({ limit: 200 });
-
-        channelSenders.forEach((channelSender) => {
-          const rawAddress =
-            channelSender?.sender ||
-            channelSender?.address ||
-            channelSender?.channelSender ||
-            channelSender?.phoneNumber ||
-            '';
-
-          const normalizedAddress = String(rawAddress).trim().toLowerCase();
-          if (!normalizedAddress.startsWith('whatsapp:')) {
-            return;
-          }
-
-          const phoneNumber = rawAddress.replace(/^whatsapp:/i, '').trim();
-          if (!phoneNumber) {
-            return;
-          }
-
-          senderMap.set(phoneNumber, {
-            sid: channelSender.sid,
-            phoneNumber,
-            friendlyName: service.friendlyName
-              ? `${service.friendlyName} (${phoneNumber})`
-              : phoneNumber,
-            status: channelSender.status || null,
-            source: 'messaging-service'
-          });
-        });
-      } catch {
-        // Some services may not expose channel senders. Ignore and continue.
-      }
-    }
-
-    // Fallback: include numbers that explicitly expose WhatsApp capability.
-    // We intentionally do not include generic incoming numbers to avoid false positives.
-    if (senderMap.size === 0) {
-      const phoneNumbers = await client.incomingPhoneNumbers.list({ limit: 200 });
-      phoneNumbers.forEach((phoneNumberResource) => {
-        if (phoneNumberResource?.capabilities?.whatsapp === true) {
-          senderMap.set(phoneNumberResource.phoneNumber, {
-            sid: phoneNumberResource.sid,
-            phoneNumber: phoneNumberResource.phoneNumber,
-            friendlyName: phoneNumberResource.friendlyName || phoneNumberResource.phoneNumber,
-            status: 'approved',
-            source: 'phone-number'
-          });
-        }
-      });
-    }
-
-    const senders = [...senderMap.values()];
+      return {
+        sid: sender.sid,
+        phoneNumber,
+        friendlyName: sender?.profile?.name || phoneNumber,
+        status: sender.status || null,
+        source: 'channel-sender',
+      };
+    }).filter((sender) => Boolean(sender.phoneNumber));
 
     const sandboxNumber = '+14155238886';
-    const hasSandbox = senders.some((sender) => sender.phoneNumber === sandboxNumber);
+    const hasSandbox = formattedSenders.some((sender) => sender.phoneNumber === sandboxNumber);
     if (!hasSandbox) {
-      senders.push({
+      formattedSenders.push({
         sid: 'whatsapp-sandbox',
         phoneNumber: sandboxNumber,
         friendlyName: 'Twilio WhatsApp Sandbox'
       });
     }
 
-    res.json(senders);
+    res.json(formattedSenders);
   } catch (error) {
     if (error.code === 20003) {
       return res.status(401).json({ error: 'Authentication failed - check your Account SID and Auth Token' });
