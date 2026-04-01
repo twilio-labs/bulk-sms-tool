@@ -72,7 +72,7 @@ export const scheduleSMS = async ({ contacts, message, contentTemplate = null, t
   return response.json()
 }
 
-export const getContentTemplates = async ({ accountSid, authToken, includeUnapproved = false }) => {
+export const getContentTemplates = async ({ accountSid, authToken, apiKeySid, apiKeySecret, includeUnapproved = false }) => {
   const response = await fetch(API_ENDPOINTS.CONTENT_TEMPLATES, {
     method: 'POST',
     headers: {
@@ -81,6 +81,8 @@ export const getContentTemplates = async ({ accountSid, authToken, includeUnappr
     body: JSON.stringify({
       accountSid,
       authToken,
+      apiKeySid,
+      apiKeySecret,
       includeUnapproved,
     })
   })

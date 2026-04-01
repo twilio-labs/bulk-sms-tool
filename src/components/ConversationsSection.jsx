@@ -5,6 +5,7 @@ import ConversationDetail from './ConversationDetail'
 
 const BACKGROUND_SYNC_INTERVAL_MS = 3 * 60 * 1000
 const INITIAL_BACKGROUND_SYNC_DELAY_MS = 15 * 1000
+const REALTIME_INIT_DEBOUNCE_MS = 450
 
 const ConversationsSection = ({ twilioConfig, senderConfig }) => {
   const [selectedConversationId, setSelectedConversationId] = useState(null)
@@ -49,55 +50,77 @@ const ConversationsSection = ({ twilioConfig, senderConfig }) => {
     return conversationsWithBadge.find((conversation) => conversation.sid === selectedSid) || null
   }, [conversationsWithBadge, selectedConversationId, currentConversation?.sid])
 
+  const normalizedTwilioConfig = useMemo(() => {
+    return {
+      accountSid: String(twilioConfig?.accountSid || '').trim(),
+      apiKeySid: String(twilioConfig?.apiKeySid || '').trim(),
+      apiKeySecret: String(twilioConfig?.apiKeySecret || '').trim(),
+      conversationServiceSid: String(twilioConfig?.conversationServiceSid || '').trim(),
+    }
+  }, [twilioConfig?.accountSid, twilioConfig?.apiKeySid, twilioConfig?.apiKeySecret, twilioConfig?.conversationServiceSid])
+
+  const isRealtimeConfigReady = useMemo(() => {
+    const isAccountSidValid = /^AC[0-9a-fA-F]{32}$/.test(normalizedTwilioConfig.accountSid)
+    const isApiKeySidValid = /^SK[0-9a-fA-F]{32}$/.test(normalizedTwilioConfig.apiKeySid)
+    const isConversationServiceSidValid = /^IS[0-9a-fA-F]{32}$/.test(normalizedTwilioConfig.conversationServiceSid)
+
+    return Boolean(
+      isAccountSidValid &&
+      isApiKeySidValid &&
+      normalizedTwilioConfig.apiKeySecret.length > 0 &&
+      isConversationServiceSidValid
+    )
+  }, [normalizedTwilioConfig])
+
+  const realtimeConfigKey = useMemo(() => {
+    return [
+      normalizedTwilioConfig.accountSid,
+      normalizedTwilioConfig.apiKeySid,
+      normalizedTwilioConfig.apiKeySecret,
+      normalizedTwilioConfig.conversationServiceSid,
+    ].join('|')
+  }, [normalizedTwilioConfig])
+
   // Fetch conversations on component mount and when twilioConfig changes
   useEffect(() => {
+    if (!isRealtimeConfigReady) {
+      initializedConfigKeyRef.current = null
+      disconnectRealtime()
+      return
+    }
+
     const setupConversations = async () => {
-      if (!twilioConfig?.accountSid) {
+      if (initializedConfigKeyRef.current === realtimeConfigKey) {
         return
       }
 
-      const configKey = [
-        twilioConfig.accountSid || '',
-        twilioConfig.apiKeySid || '',
-        twilioConfig.apiKeySecret || '',
-        twilioConfig.conversationServiceSid || '',
-      ].join('|')
+      initializedConfigKeyRef.current = realtimeConfigKey
 
-      if (initializedConfigKeyRef.current === configKey) {
-        return
-      }
-
-      initializedConfigKeyRef.current = configKey
-
-      await initializeRealtime(twilioConfig)
+      await initializeRealtime(normalizedTwilioConfig)
     }
 
-    if (twilioConfig?.accountSid) {
+    const timeoutId = setTimeout(() => {
       setupConversations()
-    }
+    }, REALTIME_INIT_DEBOUNCE_MS)
 
-    // Only disconnect on unmount, not on config changes
     return () => {
-      if (!twilioConfig?.accountSid) {
-        disconnectRealtime()
-        initializedConfigKeyRef.current = null
-      }
+      clearTimeout(timeoutId)
     }
-  }, [twilioConfig?.accountSid, twilioConfig?.apiKeySid, twilioConfig?.apiKeySecret, twilioConfig?.conversationServiceSid, initializeRealtime, disconnectRealtime])
+  }, [disconnectRealtime, initializeRealtime, isRealtimeConfigReady, normalizedTwilioConfig, realtimeConfigKey])
 
   useEffect(() => {
-    if (!twilioConfig?.accountSid) {
+    if (!isRealtimeConfigReady) {
       return
     }
 
     const timeoutId = setTimeout(() => {
-      fetchConversations(twilioConfig, { silent: true }).catch((syncError) => {
+      fetchConversations(normalizedTwilioConfig, { silent: true }).catch((syncError) => {
         console.warn('Initial background conversation sync failed:', syncError)
       })
     }, INITIAL_BACKGROUND_SYNC_DELAY_MS)
 
     const intervalId = setInterval(() => {
-      fetchConversations(twilioConfig, { silent: true }).catch((syncError) => {
+      fetchConversations(normalizedTwilioConfig, { silent: true }).catch((syncError) => {
         console.warn('Background conversation sync failed:', syncError)
       })
     }, BACKGROUND_SYNC_INTERVAL_MS)
@@ -106,7 +129,7 @@ const ConversationsSection = ({ twilioConfig, senderConfig }) => {
       clearTimeout(timeoutId)
       clearInterval(intervalId)
     }
-  }, [twilioConfig, fetchConversations])
+  }, [fetchConversations, isRealtimeConfigReady, normalizedTwilioConfig, realtimeConfigKey])
 
   const handleSelectConversation = async (conversationSid) => {
     setSelectedConversationId(conversationSid)
@@ -145,8 +168,8 @@ const ConversationsSection = ({ twilioConfig, senderConfig }) => {
             {realtimeStatus === 'connected' ? 'Realtime On' : realtimeStatus === 'connecting' ? 'Realtime Connecting' : 'Realtime Off'}
           </span>
           <button
-            onClick={() => twilioConfig?.accountSid && fetchConversations(twilioConfig)}
-            disabled={!twilioConfig?.accountSid}
+            onClick={() => isRealtimeConfigReady && fetchConversations(normalizedTwilioConfig)}
+            disabled={!isRealtimeConfigReady}
             className="px-3 py-1 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
             title="Refresh conversations"
           >
@@ -156,9 +179,9 @@ const ConversationsSection = ({ twilioConfig, senderConfig }) => {
       </div>
 
       {/* Configuration warning */}
-      {!twilioConfig?.accountSid && (
+      {!isRealtimeConfigReady && (
         <div className="p-4 bg-yellow-100 border border-yellow-400 text-yellow-800 rounded">
-          Please configure Twilio credentials in the Settings tab to view and manage conversations
+          Please enter valid Replies credentials (Account SID, API Key SID/Secret, and Conversation Service SID) to view and manage conversations
         </div>
       )}
 

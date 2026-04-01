@@ -142,30 +142,39 @@ export const useConversations = () => {
 
   const mapConversationParticipants = useCallback(async (conversation) => {
     const participants = await conversation.getParticipants().catch(() => [])
-    const nonChatParticipant = participants.find(
-      (participant) => participant.identity !== realtimeIdentity
-    )
-
-    const addressCandidates = [
-      nonChatParticipant?.messagingBinding?.address,
-      nonChatParticipant?.messagingBinding?.projectedAddress,
-      nonChatParticipant?.attributes?.proxy_address,
-      nonChatParticipant?.attributes?.projected_address,
-      nonChatParticipant?.attributes?.address,
-      nonChatParticipant?.attributes?.phone,
-      nonChatParticipant?.identity,
-    ]
+    const addressCandidates = participants.flatMap((participant) => [
+      participant?.messagingBinding?.address,
+      participant?.messagingBinding?.projectedAddress,
+      participant?.attributes?.proxy_address,
+      participant?.attributes?.projected_address,
+      participant?.attributes?.address,
+      participant?.attributes?.phone,
+      participant?.identity,
+    ])
 
     const normalizedCandidates = addressCandidates
       .filter((candidate) => typeof candidate === 'string' && candidate.trim())
       .map((candidate) => String(candidate).trim())
 
-    const rawAddress = normalizedCandidates[0] || null
+    const isPhoneLikeAddress = (value) => {
+      const normalized = String(value || '').replace(/^whatsapp:/i, '').trim()
+      return /^\+[1-9]\d{1,14}$/.test(normalized)
+    }
+
+    const rawAddress = normalizedCandidates.find((candidate) => isPhoneLikeAddress(candidate)) || null
     const normalizedAddress = rawAddress ? rawAddress.replace(/^whatsapp:/i, '').trim() : null
+
+    const uniqueName = typeof conversation?.uniqueName === 'string' ? conversation.uniqueName.trim() : ''
+    let uniqueNamePhone = null
+    if (uniqueName) {
+      const parts = uniqueName.split('-')
+      uniqueNamePhone = parts.length > 1 ? parts.slice(1).join('-').trim() : uniqueName
+      uniqueNamePhone = uniqueNamePhone.replace(/^whatsapp:/i, '').trim()
+    }
 
     const phone =
       normalizedAddress ||
-      conversation.uniqueName ||
+      uniqueNamePhone ||
       null
 
     const hasWhatsAppAddress = normalizedCandidates.some((candidate) => candidate.toLowerCase().startsWith('whatsapp:'))
@@ -226,7 +235,12 @@ export const useConversations = () => {
       
       // Message is outbound if author matches our identity OR doesn't match the contact's phone
       // (If author is not the contact's phone and not empty, it's from us)
-      const outbound = authorMatchesIdentity || (!authorMatchesPhone && message.author && message.author !== 'system')
+      const outbound = authorMatchesIdentity || (
+        Boolean(participantData.phone) &&
+        !authorMatchesPhone &&
+        message.author &&
+        message.author !== 'system'
+      )
 
       return {
         id: message.sid || String(message.index),
@@ -287,25 +301,43 @@ export const useConversations = () => {
   }, [])
 
   const subscribeViaServer = useCallback(async (conversationSid) => {
-    if (!conversationSid || !twilioConfigRef.current?.accountSid || !twilioConfigRef.current?.authToken || !realtimeIdentity) {
+    const hasAuthTokenCreds = Boolean(twilioConfigRef.current?.accountSid && twilioConfigRef.current?.authToken)
+    const hasApiKeyCreds = Boolean(
+      twilioConfigRef.current?.accountSid &&
+      twilioConfigRef.current?.apiKeySid &&
+      twilioConfigRef.current?.apiKeySecret
+    )
+
+    if (!conversationSid || (!hasAuthTokenCreds && !hasApiKeyCreds) || !realtimeIdentity) {
       return false
     }
 
-    const subscribeUrl = API_ENDPOINTS.CONVERSATION_SUBSCRIBE.replace(':conversationSid', encodeURIComponent(conversationSid))
-    const response = await fetch(subscribeUrl, {
+    const response = await fetch(API_ENDPOINTS.CONVERSATION_SUBSCRIBE, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
+        conversationSid,
         twilioConfig: twilioConfigRef.current,
         identity: realtimeIdentity,
       }),
     })
 
     if (!response.ok) {
-      const errBody = await response.json().catch(() => ({}))
-      throw new Error(errBody.error || 'Failed to subscribe to conversation')
+      const responseText = await response.text().catch(() => '')
+      let errorMessage = ''
+
+      if (responseText) {
+        try {
+          const parsed = JSON.parse(responseText)
+          errorMessage = parsed?.error || ''
+        } catch {
+          errorMessage = responseText.trim()
+        }
+      }
+
+      throw new Error(errorMessage || `Failed to subscribe to conversation (HTTP ${response.status})`)
     }
 
     return true
@@ -460,7 +492,6 @@ export const useConversations = () => {
 
     try {
       const conversation = await ensureConversationAccess(conversationSid)
-
       const detail = await mapConversationDetail(conversation)
 
       // Only commit result if this is still the latest selected conversation.

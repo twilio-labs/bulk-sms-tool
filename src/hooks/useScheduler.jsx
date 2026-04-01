@@ -1,6 +1,25 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { getScheduledJobs, getJobResults, scheduleSMS, cancelScheduledJob as cancelScheduledJobAPI } from '../services/smsService'
+import { useState, useEffect, useCallback } from 'react'
+import { scheduleSMS } from '../services/smsService'
 import { isScheduledTimeValid, combineDateTime } from '../utils/dateUtils'
+
+const SCHEDULED_JOBS_STORAGE_KEY = 'twilio-bulk-scheduled-jobs'
+
+const getStoredScheduledJobs = () => {
+  if (typeof window === 'undefined') {
+    return []
+  }
+
+  try {
+    const stored = window.localStorage.getItem(SCHEDULED_JOBS_STORAGE_KEY)
+    if (!stored) return []
+
+    const parsed = JSON.parse(stored)
+    return Array.isArray(parsed) ? parsed : []
+  } catch (error) {
+    console.error('Failed to read scheduled jobs from local storage:', error)
+    return []
+  }
+}
 
 export const useScheduler = () => {
   const [scheduledSending, setScheduledSending] = useState({
@@ -12,99 +31,34 @@ export const useScheduler = () => {
   const [hasActiveScheduledJobs, setHasActiveScheduledJobs] = useState(false)
   const [jobResults, setJobResults] = useState(null)
   const [lastScheduledMessage, setLastScheduledMessage] = useState(null)
-  const [scheduledJobs, setScheduledJobs] = useState([])
-  
-  // Ref to track completion monitoring timers
-  const completionTimers = useRef(new Map())
+  const [scheduledJobs, setScheduledJobs] = useState(getStoredScheduledJobs)
 
   const checkActiveJobs = useCallback(async () => {
-    try {
-      const data = await getScheduledJobs()
-      setHasActiveScheduledJobs(data.totalJobs > 0)
-      return data
-    } catch (error) {
-      // Only log error if it's not a rate limiting issue
-      if (!error.message.includes('429') && !error.message.includes('Too Many Requests')) {
-        console.error('Error checking active jobs:', error)
-      }
-      return null
+    const activeJobs = scheduledJobs.filter(job => job.status === 'scheduled')
+    const data = {
+      totalJobs: activeJobs.length,
+      jobs: scheduledJobs
     }
-  }, [])
+    setHasActiveScheduledJobs(activeJobs.length > 0)
+    return data
+  }, [scheduledJobs])
 
   const checkJobResults = useCallback(async (jobId) => {
-    try {
-      const jobResult = await getJobResults(jobId)
-      if (jobResult) {
-        setJobResults(jobResult)
-        return jobResult
-      }
-      return null
-    } catch (error) {
-      console.error('Error checking job results:', error)
-      return null
-    }
-  }, [])
+    const job = scheduledJobs.find(item => item.id === jobId)
+    if (!job) return null
 
-  // Monitor a specific job for completion
-  const monitorJobCompletion = useCallback((jobId, scheduledTime) => {
-    console.log(`Starting to monitor job completion for job ${jobId}`)
-    
-    // Clear any existing timer for this job
-    if (completionTimers.current.has(jobId)) {
-      clearInterval(completionTimers.current.get(jobId))
-      completionTimers.current.delete(jobId)
+    const localResult = {
+      jobId: job.id,
+      status: job.status || 'scheduled',
+      scheduledTime: job.scheduledTime,
+      channel: job.channel,
+      contactCount: job.contactCount || job.recipients?.length || 0,
+      messageSids: job.messageSids || []
     }
 
-    const scheduledDate = new Date(scheduledTime)
-    const now = new Date()
-    
-    // Calculate when to start checking (at scheduled time)
-    const delayUntilScheduled = Math.max(0, scheduledDate.getTime() - now.getTime())
-    
-    console.log(`Job ${jobId} scheduled for ${scheduledDate.toLocaleString()}, will start monitoring in ${delayUntilScheduled}ms`)
-    
-    setTimeout(() => {
-      console.log(`Starting monitoring interval for job ${jobId}`)
-      
-      // Start checking every 10 seconds once the job should have started
-      const checkInterval = setInterval(async () => {
-        console.log(`Checking completion status for job ${jobId}`)
-        try {
-          const data = await getScheduledJobs()
-          const job = data.jobs?.find(j => j.jobId === jobId)
-          
-          console.log(`Job ${jobId} current status:`, job?.status)
-          
-          if (job && (job.status === 'sent' || job.status === 'failed')) {
-            console.log(`Job ${jobId} completed with status: ${job.status}! Updating UI...`)
-            // Job completed! Update the local state
-            setScheduledJobs(prev => 
-              prev.map(j => j.id === jobId ? { ...j, status: job.status } : j)
-            )
-            
-            // Clear the monitoring interval
-            clearInterval(checkInterval)
-            completionTimers.current.delete(jobId)
-          }
-        } catch (error) {
-          console.error('Error monitoring job completion:', error)
-        }
-      }, 5000) // Check every 5 seconds
-      
-      // Store the interval reference
-      completionTimers.current.set(jobId, checkInterval)
-      
-      // Auto-cleanup after 30 minutes to prevent infinite polling
-      setTimeout(() => {
-        if (completionTimers.current.has(jobId)) {
-          console.log(`Auto-cleanup: stopping monitoring for job ${jobId}`)
-          clearInterval(completionTimers.current.get(jobId))
-          completionTimers.current.delete(jobId)
-        }
-      }, 30 * 60 * 1000) // 30 minutes
-      
-    }, delayUntilScheduled)
-  }, [])
+    setJobResults(localResult)
+    return localResult
+  }, [scheduledJobs])
 
   const scheduleMessage = useCallback(async ({ contacts, message, contentTemplate = null, twilioConfig, senderConfig, messageDelay = 1000 }) => {
     const { scheduledDate, scheduledTime } = scheduledSending
@@ -124,53 +78,66 @@ export const useScheduler = () => {
     }
 
     try {
+      const selectedChannel = senderConfig?.channel || 'sms'
+
       const result = await scheduleSMS({
         contacts,
         message,
         contentTemplate,
         twilioConfig,
         senderConfig,
-        channel: senderConfig?.channel || 'sms',
+        channel: selectedChannel,
         scheduledDateTime,
         messageDelay
       })
 
+      const resolvedJobId = result?.jobId || result?.messageSids?.[0] || `scheduled_${Date.now()}`
+      const nowIso = new Date().toISOString()
+
       // Store job ID and message details for tracking
       setScheduledSending(prev => ({
         ...prev,
-        lastJobId: result.jobId
+        lastJobId: resolvedJobId
       }))
 
       // Store the scheduled message details
       setLastScheduledMessage({
-        jobId: result.jobId,
+        jobId: resolvedJobId,
         message: message,
         contentTemplate,
-        channel: senderConfig?.channel || 'sms',
+        channel: selectedChannel,
         contacts: contacts,
         scheduledDateTime: scheduledDateTime,
         scheduledFor: new Date(scheduledDateTime).toLocaleString(),
         contactCount: contacts.length,
-        createdAt: new Date().toISOString()
+        createdAt: nowIso
       })
 
       // Add to scheduled jobs list
       const newJob = {
-        id: result.jobId || `job_${Date.now()}`,
+        id: resolvedJobId,
         contentTemplate,
-        channel: senderConfig?.channel || 'sms',
+        channel: selectedChannel,
+        status: 'scheduled',
+        contactCount: contacts.length,
         scheduledTime: scheduledDateTime,
         message,
         recipients: contacts,
+        messageSids: result?.messageSids || [],
+        schedulingMode: 'twilio-native',
         totalDuration: new Date(scheduledDateTime).getTime() - Date.now(),
-        createdAt: new Date().toISOString()
+        createdAt: nowIso
       }
-      setScheduledJobs(prev => [...prev, newJob])
 
-      // Start monitoring this job for completion
-      monitorJobCompletion(result.jobId, scheduledDateTime)
+      setScheduledJobs(prev => {
+        const withoutDuplicate = prev.filter(job => job.id !== newJob.id)
+        return [...withoutDuplicate, newJob]
+      })
 
-      return result
+      return {
+        ...result,
+        jobId: resolvedJobId
+      }
     } catch (error) {
       throw new Error(`Failed to schedule messages: ${error.message}`)
     }
@@ -210,16 +177,8 @@ export const useScheduler = () => {
 
   const cancelScheduledJob = useCallback(async (jobId) => {
     try {
-      // Call backend API to actually cancel the job and clear timeout
-      await cancelScheduledJobAPI(jobId)
-      
-      // Clear completion monitoring
-      if (completionTimers.current.has(jobId)) {
-        clearInterval(completionTimers.current.get(jobId))
-        completionTimers.current.delete(jobId)
-      }
-      
-      // Remove from local state only after successful API call
+      // Vercel/serverless deployments do not maintain in-memory job stores.
+      // We only remove local tracking here; cancellation in Twilio must be managed in Twilio Console.
       setScheduledJobs(prev => prev.filter(job => job.id !== jobId))
       
       // If cancelling the last scheduled message, clear it
@@ -232,11 +191,11 @@ export const useScheduler = () => {
         setScheduledSending(prev => ({ ...prev, lastJobId: null }))
       }
       
-      console.log(`✅ Successfully cancelled job ${jobId}`)
+      console.log(`Removed scheduled job ${jobId} from local tracking`)
+      return { success: true, localOnly: true }
       
     } catch (error) {
       console.error(`❌ Failed to cancel job ${jobId}:`, error)
-      // Optionally show user error message
       throw error
     }
   }, [lastScheduledMessage, scheduledSending.lastJobId])
@@ -249,53 +208,26 @@ export const useScheduler = () => {
     )
   }, [])
 
-  // Manual refresh function for when users want to check job status
-  // Cleanup timers on unmount
   useEffect(() => {
-    return () => {
-      completionTimers.current.forEach((timer) => {
-        clearInterval(timer)
-      })
-      completionTimers.current.clear()
+    if (typeof window === 'undefined') return
+
+    try {
+      window.localStorage.setItem(SCHEDULED_JOBS_STORAGE_KEY, JSON.stringify(scheduledJobs))
+    } catch (error) {
+      console.error('Failed to persist scheduled jobs:', error)
     }
-  }, [])
+  }, [scheduledJobs])
 
   const refreshJobs = useCallback(async () => {
-    try {
-      const data = await getScheduledJobs()
-      if (data?.jobs) {
-        setScheduledJobs(data.jobs.map(job => ({
-          id: job.jobId,
-          channel: job.channel || 'sms',
-          contentTemplate: job.contentTemplate || null,
-          scheduledTime: job.scheduledDateTime,
-          contactCount: job.contactCount,
-          status: job.status,
-          message: job.message
-        })))
-      }
-    } catch (error) {
-      console.error('Error refreshing jobs:', error)
+    return {
+      totalJobs: scheduledJobs.length,
+      jobs: scheduledJobs
     }
-  }, [])
+  }, [scheduledJobs])
 
-  // Remove automatic status checking - jobs will be updated when they actually complete
-  // The server handles job execution and will mark jobs as complete
-
-  // Auto-check for active jobs on mount only (disable periodic polling to prevent 429 errors)
   useEffect(() => {
-    checkActiveJobs()
-    // Removed setInterval to prevent 429 errors
-    // const interval = setInterval(checkActiveJobs, POLLING_INTERVALS.ACTIVE_JOBS_CHECK)
-    // return () => clearInterval(interval)
-  }, [checkActiveJobs])
-
-  // Remove all periodic polling - only check jobs when they actually complete
-  // The server will handle job execution and completion
-  useEffect(() => {
-    // Only check once on mount, no more periodic polling
-    checkActiveJobs()
-  }, [checkActiveJobs])
+    setHasActiveScheduledJobs(scheduledJobs.some(job => job.status === 'scheduled'))
+  }, [scheduledJobs])
 
   return {
     scheduledSending,
