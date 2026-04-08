@@ -1,29 +1,13 @@
-import express from 'express';
-import cors from 'cors';
-import twilio from 'twilio';
 import rateLimit from 'express-rate-limit';
-import { v4 as uuidv4 } from 'uuid';
+import twilio from 'twilio';
 import https from 'https';
+import crypto from 'crypto';
+import { fileURLToPath } from 'url';
+import app from './app.js';
 
-const app = express();
+const uuidv4 = () => crypto.randomUUID();
+
 const PORT = process.env.PORT || 3001;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Rate limiting to prevent abuse
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many messaging requests from this IP, please try again later.',
-  skip: (req) => {
-    const path = req.path || '';
-    return path === '/conversations-token' || path === '/conversations' || /^\/conversations\/.+/.test(path);
-  },
-});
-
-app.use('/api/', limiter);
 
 const conversationsTokenLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
@@ -133,23 +117,37 @@ const extractBindingAddresses = (participant) => {
 // Store completed job results
 const completedJobs = new Map();
 
-// In-memory cache for conversation metadata (phone -> conversationSid mapping)
+// In-memory cache for conversation metadata (service/channel/phone -> conversationSid mapping)
 // This is just a cache; source of truth is Twilio Conversations API
 const conversationCache = new Map(); // Map<phone, { conversationSid, channel, participants }>
 
-const getConversationsApi = (client) => {
+const getConversationsApi = (client, conversationServiceSid = null) => {
+  if (conversationServiceSid && typeof conversationServiceSid === 'string') {
+    const serviceScopedApi = client?.conversations?.v1?.services?.(conversationServiceSid)?.conversations;
+    if (serviceScopedApi) {
+      return serviceScopedApi;
+    }
+  }
+
   // Twilio Node SDK exposes Conversations under versioned paths.
   return client?.conversations?.v1?.conversations || client?.conversations?.conversations || null;
 };
 
-const getConversationContext = (client, conversationSid) => {
-  const conversationsApi = getConversationsApi(client);
+const getConversationContext = (client, conversationSid, conversationServiceSid = null) => {
+  const conversationsApi = getConversationsApi(client, conversationServiceSid);
 
   if (!conversationsApi) {
     throw new Error('Twilio Conversations API is unavailable in this SDK/client configuration');
   }
 
   return conversationsApi(conversationSid);
+};
+
+const getConversationCacheKey = (phone, channel = 'sms', conversationServiceSid = null) => {
+  const normalizedPhone = phone.replace(/^whatsapp:/i, '').trim();
+  const normalizedChannel = channel === 'whatsapp' ? 'whatsapp' : 'sms';
+  const normalizedServiceSid = String(conversationServiceSid || 'default').trim();
+  return `${normalizedServiceSid}:${normalizedChannel}:${normalizedPhone}`;
 };
 
 const normalizeConversationPhone = (conversation) => {
@@ -189,7 +187,7 @@ const normalizeConversationPhone = (conversation) => {
   return null;
 };
 
-const deriveContactInfoFromParticipants = async (client, conversationSid) => {
+const deriveContactInfoFromParticipants = async (client, conversationSid, conversationServiceSid = null) => {
   if (!conversationSid) {
     return { phone: null, channel: null };
   }
@@ -198,7 +196,7 @@ const deriveContactInfoFromParticipants = async (client, conversationSid) => {
   let resolvedChannel = null;
 
   try {
-    const participants = await getConversationContext(client, conversationSid).participants.list({ limit: 20 });
+    const participants = await getConversationContext(client, conversationSid, conversationServiceSid).participants.list({ limit: 20 });
 
     for (const participant of participants || []) {
       const candidates = extractBindingAddresses(participant);
@@ -278,18 +276,19 @@ const isConversationClosed = (conversation) => {
 };
 
 // Helper function to get or create a conversation using Twilio Conversations SDK
-const getOrCreateConversation = async (client, phone, channel = 'sms') => {
+const getOrCreateConversation = async (client, phone, channel = 'sms', conversationServiceSid = null) => {
   const normalizedPhone = phone.replace(/^whatsapp:/i, '').trim();
   const conversationUniqueId = `${channel}-${normalizedPhone}`;
+  const cacheKey = getConversationCacheKey(normalizedPhone, channel, conversationServiceSid);
   
   // Check cache first
-  if (conversationCache.has(normalizedPhone)) {
-    const cached = conversationCache.get(normalizedPhone);
+  if (conversationCache.has(cacheKey)) {
+    const cached = conversationCache.get(cacheKey);
     return cached;
   }
 
   try {
-    const conversationsApi = getConversationsApi(client);
+    const conversationsApi = getConversationsApi(client, conversationServiceSid);
 
     if (!conversationsApi) {
       throw new Error('Twilio Conversations API is unavailable in this SDK/client configuration');
@@ -307,7 +306,7 @@ const getOrCreateConversation = async (client, phone, channel = 'sms') => {
           channel,
           phone: normalizedPhone
         };
-        conversationCache.set(normalizedPhone, cached);
+        conversationCache.set(cacheKey, cached);
         return cached;
       }
     }
@@ -325,7 +324,7 @@ const getOrCreateConversation = async (client, phone, channel = 'sms') => {
 
     // Add participant for the contact
     try {
-      await getConversationContext(client, newConversation.sid).participants.create({
+      await getConversationContext(client, newConversation.sid, conversationServiceSid).participants.create({
         identity: normalizedPhone
       });
     } catch (error) {
@@ -337,7 +336,7 @@ const getOrCreateConversation = async (client, phone, channel = 'sms') => {
       channel,
       phone: normalizedPhone
     };
-    conversationCache.set(normalizedPhone, cached);
+    conversationCache.set(cacheKey, cached);
     return cached;
   } catch (error) {
     console.error('Error getting or creating conversation:', error);
@@ -568,12 +567,12 @@ const createTwilioRestClient = (config = {}) => {
   const apiKeySid = config?.apiKeySid;
   const apiKeySecret = config?.apiKeySecret;
 
-  if (accountSid && authToken) {
-    return twilio(accountSid, authToken);
-  }
-
   if (accountSid && apiKeySid && apiKeySecret) {
     return twilio(apiKeySid, apiKeySecret, { accountSid });
+  }
+
+  if (accountSid && authToken) {
+    return twilio(accountSid, authToken);
   }
 
   throw new Error('Missing Twilio REST credentials. Provide accountSid with authToken, or accountSid with apiKeySid and apiKeySecret.');
@@ -1337,57 +1336,93 @@ app.post('/api/conversations-token', conversationsTokenLimiter, async (req, res)
   }
 });
 
-app.post('/api/conversations/:conversationSid/subscribe', async (req, res) => {
+const subscribeIdentityToConversation = async ({ conversationSid, twilioConfig = {}, identity }) => {
+  if (!conversationSid) {
+    const error = new Error('Missing conversationSid parameter');
+    error.status = 400;
+    throw error;
+  }
+
+  if (!twilioConfig?.accountSid) {
+    const error = new Error('Missing Twilio credentials (accountSid required)');
+    error.status = 400;
+    throw error;
+  }
+
+  const sanitizedIdentity = sanitizeIdentity(identity);
+  if (!sanitizedIdentity) {
+    const error = new Error('Missing valid identity');
+    error.status = 400;
+    throw error;
+  }
+
+  let client;
   try {
-    const { conversationSid } = req.params;
-    const { twilioConfig = {}, identity } = req.body || {};
+    client = createTwilioRestClient(twilioConfig);
+  } catch (credentialsError) {
+    credentialsError.status = 400;
+    throw credentialsError;
+  }
 
-    if (!conversationSid) {
-      return res.status(400).json({ error: 'Missing conversationSid parameter' });
-    }
+  const conversationContext = getConversationContext(client, conversationSid, twilioConfig?.conversationServiceSid || null);
 
-    if (!twilioConfig?.accountSid) {
-      return res.status(400).json({ error: 'Missing Twilio credentials (accountSid required)' });
-    }
+  // Treat "already a participant" as success to keep subscribe idempotent.
+  const participants = await conversationContext.participants.list({ limit: 100 }).catch(() => []);
+  const isAlreadySubscribed = Array.isArray(participants)
+    && participants.some((participant) => participant?.identity === sanitizedIdentity);
 
-    const sanitizedIdentity = sanitizeIdentity(identity);
-    if (!sanitizedIdentity) {
-      return res.status(400).json({ error: 'Missing valid identity' });
-    }
-
-    let client;
+  if (!isAlreadySubscribed) {
     try {
-      client = createTwilioRestClient(twilioConfig);
-    } catch (credentialsError) {
-      return res.status(400).json({ error: credentialsError.message });
-    }
-
-    try {
-      await getConversationContext(client, conversationSid).participants.create({
+      await conversationContext.participants.create({
         identity: sanitizedIdentity,
       });
     } catch (error) {
       const message = String(error?.message || '').toLowerCase();
       const code = Number(error?.code);
+      const status = Number(error?.status);
       const alreadyParticipant =
+        status === 409 ||
+        code === 50416 ||
         code === 50433 ||
         message.includes('participant already exists') ||
-        message.includes('already exists');
+        message.includes('already exists') ||
+        message.includes('participantconversation already exists') ||
+        message.includes('conflict');
 
       if (!alreadyParticipant) {
         throw error;
       }
     }
+  }
 
-    return res.json({
-      success: true,
-      conversationSid,
-      identity: sanitizedIdentity,
-      subscribed: true,
-    });
+  return {
+    success: true,
+    conversationSid,
+    identity: sanitizedIdentity,
+    subscribed: true,
+  };
+};
+
+app.post('/api/subscribe-conversation', async (req, res) => {
+  try {
+    const { conversationSid, twilioConfig = {}, identity } = req.body || {};
+    const result = await subscribeIdentityToConversation({ conversationSid, twilioConfig, identity });
+    return res.json(result);
   } catch (error) {
     console.error('Error subscribing identity to conversation:', error);
-    return res.status(500).json({ error: `Failed to subscribe to conversation: ${error.message}` });
+    return res.status(Number(error?.status) || 500).json({ error: `Failed to subscribe to conversation: ${error.message}` });
+  }
+});
+
+app.post('/api/conversations/:conversationSid/subscribe', async (req, res) => {
+  try {
+    const { conversationSid } = req.params;
+    const { twilioConfig = {}, identity } = req.body || {};
+    const result = await subscribeIdentityToConversation({ conversationSid, twilioConfig, identity });
+    return res.json(result);
+  } catch (error) {
+    console.error('Error subscribing identity to conversation:', error);
+    return res.status(Number(error?.status) || 500).json({ error: `Failed to subscribe to conversation: ${error.message}` });
   }
 });
 
@@ -1446,7 +1481,7 @@ app.get('/api/conversations', async (req, res) => {
     } catch (credentialsError) {
       return res.status(400).json({ error: credentialsError.message });
     }
-    const conversationsApi = getConversationsApi(client);
+    const conversationsApi = getConversationsApi(client, config?.conversationServiceSid || null);
 
     if (!conversationsApi) {
       return res.status(500).json({ error: 'Twilio Conversations API is unavailable for this SDK version' });
@@ -1457,10 +1492,21 @@ app.get('/api/conversations', async (req, res) => {
       limit: 100
     });
 
+    const configuredServiceSid = String(config?.conversationServiceSid || '').trim() || null;
+
+    const serviceScopedConversations = configuredServiceSid
+      ? conversations.filter((conv) => {
+          const conversationServiceSid = String(
+            conv?.chatServiceSid || conv?.chat_service_sid || ''
+          ).trim();
+          return conversationServiceSid === configuredServiceSid;
+        })
+      : conversations;
+
     const shouldIncludeClosed = String(includeClosed).toLowerCase() === 'true';
     const visibleConversations = shouldIncludeClosed
-      ? conversations
-      : conversations.filter((conv) => !isConversationClosed(conv));
+      ? serviceScopedConversations
+      : serviceScopedConversations.filter((conv) => !isConversationClosed(conv));
 
     const uniqueConversations = [];
     const seenConversationSids = new Set();
@@ -1506,13 +1552,13 @@ app.get('/api/conversations', async (req, res) => {
 
       if (conv?.sid) {
         try {
-          const latestMessages = await getConversationContext(client, conv.sid).messages.list({ limit: 1 });
+          const latestMessages = await getConversationContext(client, conv.sid, config?.conversationServiceSid || null).messages.list({ limit: 1 });
           latestMessage = latestMessages[0] || null;
         } catch (messageError) {
           console.warn(`Failed to fetch latest message for conversation ${conv.sid}:`, messageError.message);
         }
 
-        const participantContactInfo = await deriveContactInfoFromParticipants(client, conv.sid);
+        const participantContactInfo = await deriveContactInfoFromParticipants(client, conv.sid, config?.conversationServiceSid || null);
 
         if (!normalizedPhone) {
           normalizedPhone = participantContactInfo.phone;
@@ -1527,6 +1573,7 @@ app.get('/api/conversations', async (req, res) => {
 
       return {
         sid: conv.sid,
+        serviceSid: conv?.chatServiceSid || conv?.chat_service_sid || null,
         phone: normalizedPhone,
         channel: resolvedChannel,
         friendlyName: conv.friendlyName,
@@ -1592,11 +1639,11 @@ app.get('/api/conversations/:phone', async (req, res) => {
     }
 
     // Get or create conversation
-    const conversationData = await getOrCreateConversation(client, normalizedPhone);
-    const conversation = await getConversationContext(client, conversationData.conversationSid).fetch();
+    const conversationData = await getOrCreateConversation(client, normalizedPhone, 'sms', config?.conversationServiceSid || null);
+    const conversation = await getConversationContext(client, conversationData.conversationSid, config?.conversationServiceSid || null).fetch();
 
     // Get all messages in conversation
-    const conversationMessages = await getConversationContext(client, conversationData.conversationSid).messages.list({
+    const conversationMessages = await getConversationContext(client, conversationData.conversationSid, config?.conversationServiceSid || null).messages.list({
       limit: 100
     });
 
@@ -1626,6 +1673,51 @@ app.get('/api/conversations/:phone', async (req, res) => {
   }
 });
 
+app.post('/api/conversations/resolve', async (req, res) => {
+  try {
+    const { twilioConfig = {}, phone, channel = 'sms' } = req.body || {};
+
+    if (!twilioConfig?.accountSid) {
+      return res.status(400).json({ error: 'Missing Twilio credentials (accountSid required)' });
+    }
+
+    if (!phone || typeof phone !== 'string') {
+      return res.status(400).json({ error: 'Missing required field: phone' });
+    }
+
+    const normalizedPhone = phone.replace(/^whatsapp:/i, '').trim();
+    if (!isValidPhoneNumber(normalizedPhone)) {
+      return res.status(400).json({ error: 'Invalid phone number format' });
+    }
+
+    const normalizedChannel = normalizeChannel(channel) || 'sms';
+
+    let client;
+    try {
+      client = createTwilioRestClient(twilioConfig);
+    } catch (credentialsError) {
+      return res.status(400).json({ error: credentialsError.message });
+    }
+
+    const conversationData = await getOrCreateConversation(
+      client,
+      normalizedPhone,
+      normalizedChannel,
+      twilioConfig?.conversationServiceSid || null
+    );
+
+    return res.json({
+      success: true,
+      conversationSid: conversationData?.conversationSid || null,
+      phone: normalizedPhone,
+      channel: normalizedChannel,
+    });
+  } catch (error) {
+    console.error('Error resolving conversation:', error);
+    return res.status(500).json({ error: `Failed to resolve conversation: ${error.message}` });
+  }
+});
+
 // Send a reply message using Twilio Conversations SDK
 app.post('/api/send-reply', async (req, res) => {
   try {
@@ -1650,10 +1742,10 @@ app.post('/api/send-reply', async (req, res) => {
     }
 
     // Get or create conversation
-    const conversationData = await getOrCreateConversation(client, normalizedPhone, channel);
+    const conversationData = await getOrCreateConversation(client, normalizedPhone, channel, twilioConfig?.conversationServiceSid || null);
 
     // Add message to conversation
-    const messageResponse = await getConversationContext(client, conversationData.conversationSid).messages.create({
+    const messageResponse = await getConversationContext(client, conversationData.conversationSid, twilioConfig?.conversationServiceSid || null).messages.create({
       body: message
     });
 
@@ -1700,7 +1792,7 @@ app.post('/api/send-reply-template', async (req, res) => {
         return res.status(400).json({ error: 'Invalid phone number format' });
       }
 
-      const conversationData = await getOrCreateConversation(client, normalizedPhone, 'whatsapp');
+      const conversationData = await getOrCreateConversation(client, normalizedPhone, 'whatsapp', twilioConfig?.conversationServiceSid || null);
       resolvedConversationSid = conversationData?.conversationSid || null;
     }
 
@@ -1717,7 +1809,7 @@ app.post('/api/send-reply-template', async (req, res) => {
       messageParams.contentVariables = JSON.stringify(templateVariables);
     }
 
-    const sentMessage = await getConversationContext(client, resolvedConversationSid).messages.create(messageParams);
+    const sentMessage = await getConversationContext(client, resolvedConversationSid, twilioConfig?.conversationServiceSid || null).messages.create(messageParams);
 
     res.json({
       success: true,
@@ -1756,14 +1848,14 @@ app.post('/api/conversations/:phone/mark-read', async (req, res) => {
     }
 
     // Get conversation
-    const conversationData = await getOrCreateConversation(client, normalizedPhone);
+    const conversationData = await getOrCreateConversation(client, normalizedPhone, 'sms', twilioConfig?.conversationServiceSid || null);
     
     // Update conversation state to mark as read
     // In Twilio Conversations, read status is tracked per participant
-    const conversation = await getConversationContext(client, conversationData.conversationSid).fetch();
+    const conversation = await getConversationContext(client, conversationData.conversationSid, twilioConfig?.conversationServiceSid || null).fetch();
     
     // Get all messages to find the latest one
-    const messages = await getConversationContext(client, conversationData.conversationSid).messages.list({
+    const messages = await getConversationContext(client, conversationData.conversationSid, twilioConfig?.conversationServiceSid || null).messages.list({
       limit: 1
     });
 
@@ -1803,8 +1895,15 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Bulk Sender API running on http://localhost:${PORT}`);
-  console.log(`Ready to send SMS and WhatsApp messages via Twilio`);
-});
+// Start server only when this file is executed directly (local dev),
+// not when imported by serverless handlers (e.g., Vercel).
+const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+
+if (isDirectRun) {
+  app.listen(PORT, () => {
+    console.log(`SMS Bulk Sender API running on http://localhost:${PORT}`);
+    console.log('Ready to send SMS messages via Twilio');
+  });
+}
+
+export default app;

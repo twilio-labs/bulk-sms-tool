@@ -6,9 +6,13 @@ const SenderConfiguration = ({
   senderConfig, 
   updateSenderConfig 
 }) => {
+  const WHATSAPP_SANDBOX_NUMBER = '+14155238886'
   const [channel, setChannel] = useState(senderConfig?.channel || 'sms')
   const [senderType, setSenderType] = useState(senderConfig?.type || 'phone')
   const [messagingServices, setMessagingServices] = useState([])
+  const [smsSenders, setSmsSenders] = useState([])
+  const [loadingSmsSenders, setLoadingSmsSenders] = useState(false)
+  const [smsSendersError, setSmsSendersError] = useState(null)
   const [whatsappSenders, setWhatsappSenders] = useState([])
   const [loadingWhatsappSenders, setLoadingWhatsappSenders] = useState(false)
   const [whatsappSendersError, setWhatsappSendersError] = useState(null)
@@ -33,6 +37,41 @@ const SenderConfiguration = ({
       fetchWhatsappSenders()
     }
   }, [twilioConfig?.accountSid, twilioConfig?.authToken, channel, senderType])
+
+  useEffect(() => {
+    if (twilioConfig?.accountSid && twilioConfig?.authToken && channel === 'sms' && senderType === 'phone') {
+      fetchSmsSenders()
+    }
+  }, [twilioConfig?.accountSid, twilioConfig?.authToken, channel, senderType])
+
+  const fetchSmsSenders = async () => {
+    setLoadingSmsSenders(true)
+    setSmsSendersError(null)
+
+    try {
+      const response = await fetch('/api/sms-senders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountSid: twilioConfig.accountSid,
+          authToken: twilioConfig.authToken
+        })
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error || 'Failed to fetch SMS senders')
+      }
+
+      const senders = await response.json()
+      setSmsSenders(senders)
+    } catch (err) {
+      setSmsSendersError(err.message)
+      console.error('Error fetching SMS senders:', err)
+    } finally {
+      setLoadingSmsSenders(false)
+    }
+  }
 
   const fetchWhatsappSenders = async () => {
     setLoadingWhatsappSenders(true)
@@ -134,6 +173,10 @@ const SenderConfiguration = ({
 
   // Check if Twilio credentials are configured
   const hasCredentials = twilioConfig?.accountSid && twilioConfig?.authToken
+  const isWhatsAppSandboxSelected =
+    channel === 'whatsapp' &&
+    senderType === 'phone' &&
+    senderConfig?.phoneNumber === WHATSAPP_SANDBOX_NUMBER
 
   return (
     <div className="space-y-6">
@@ -228,6 +271,17 @@ const SenderConfiguration = ({
                 Refresh
               </button>
             )}
+            {channel === 'sms' && hasCredentials && (
+              <button
+                type="button"
+                onClick={fetchSmsSenders}
+                disabled={loadingSmsSenders}
+                className="flex items-center px-3 py-1 text-xs text-gray-600 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3 h-3 mr-1 ${loadingSmsSenders ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            )}
           </div>
 
           {whatsappSendersError && channel === 'whatsapp' && (
@@ -237,7 +291,44 @@ const SenderConfiguration = ({
             </div>
           )}
 
-          {channel === 'whatsapp' && loadingWhatsappSenders ? (
+          {smsSendersError && channel === 'sms' && (
+            <div className="flex items-center p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg mb-3">
+              <AlertCircle className="w-4 h-4 mr-2" />
+              {smsSendersError}
+            </div>
+          )}
+
+          {channel === 'sms' && loadingSmsSenders ? (
+            <div className="flex items-center justify-center py-8 text-gray-500">
+              <RefreshCw className="w-5 h-5 animate-spin mr-2" />
+              Loading SMS senders...
+            </div>
+          ) : channel === 'sms' && hasCredentials && smsSenders.length > 0 ? (
+            <>
+              <select
+                value={senderConfig?.phoneNumber || ''}
+                onChange={(e) => handlePhoneNumberChange(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:shadow-lg transition-shadow"
+              >
+                <option value="">Select an SMS sender number</option>
+                {smsSenders.map((sender) => {
+                  const label = sender.friendlyName !== sender.phoneNumber
+                    ? `${sender.friendlyName} (${sender.phoneNumber})`
+                    : sender.phoneNumber
+                  return (
+                    <option key={sender.sid} value={sender.phoneNumber}>
+                      {label}
+                    </option>
+                  )
+                })}
+              </select>
+              <p className="text-xs text-gray-500 mt-2">
+                Showing SMS-capable sender numbers from your Twilio account.
+              </p>
+            </>
+          ) :
+
+          channel === 'whatsapp' && loadingWhatsappSenders ? (
             <div className="flex items-center justify-center py-8 text-gray-500">
               <RefreshCw className="w-5 h-5 animate-spin mr-2" />
               Loading WhatsApp senders...
@@ -252,14 +343,12 @@ const SenderConfiguration = ({
                 <option value="">Select an approved WhatsApp sender</option>
                 {[...whatsappSenders]
                   .sort((a, b) => {
-                    const SANDBOX = '+14155238886'
-                    if (a.phoneNumber === SANDBOX) return 1
-                    if (b.phoneNumber === SANDBOX) return -1
+                    if (a.phoneNumber === WHATSAPP_SANDBOX_NUMBER) return 1
+                    if (b.phoneNumber === WHATSAPP_SANDBOX_NUMBER) return -1
                     return 0
                   })
                   .map((sender) => {
-                    const SANDBOX = '+14155238886'
-                    const isSandbox = sender.phoneNumber === SANDBOX
+                    const isSandbox = sender.phoneNumber === WHATSAPP_SANDBOX_NUMBER
                     const label = isSandbox
                       ? `${sender.phoneNumber} — Sandbox Sender`
                       : sender.friendlyName !== sender.phoneNumber
@@ -275,6 +364,20 @@ const SenderConfiguration = ({
               <p className="text-xs text-gray-500 mt-2">
                 Showing approved WhatsApp senders from your Twilio account. The app will automatically send using the whatsapp: prefix.
               </p>
+              {isWhatsAppSandboxSelected && (
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md p-3 mt-3">
+                  You selected the Twilio WhatsApp Sandbox sender. All recipients must first join your sandbox before they can receive messages.{' '}
+                  <a
+                    href="https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn?frameUrl=%2Fconsole%2Fsms%2Fwhatsapp%2Flearn%3Fx-target-region%3Dus1"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline font-medium"
+                  >
+                    Manage sandbox join instructions in Twilio Console
+                  </a>
+                  .
+                </p>
+              )}
             </>
           ) : (
             <>

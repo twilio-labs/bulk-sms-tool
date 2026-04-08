@@ -1,5 +1,4 @@
 import SendingPanel from './SendingPanel'
-import ScheduledJobsSection from './ScheduledJobsSection'
 import DelayConfiguration from './DelayConfiguration'
 import AccordionSection from './AccordionSection'
 
@@ -25,10 +24,6 @@ const SendingSection = ({
   updateScheduling,
   lastScheduledMessage,
   clearLastScheduledMessage,
-  scheduledJobs = [],
-  onCancelScheduledJob,
-  onUpdateJobStatus,
-  onRefreshJobs,
   messageDelay,
   onDelayChange,
   getEstimatedCompletionTime,
@@ -80,17 +75,6 @@ const SendingSection = ({
         clearLastScheduledMessage={clearLastScheduledMessage}
         messageDelay={messageDelay}
       />
-      
-      {/* Scheduled Jobs Section */}
-      {scheduledJobs && scheduledJobs.length > 0 && (
-        <div className="mt-8">
-          <ScheduledJobsSection 
-            scheduledJobs={scheduledJobs}
-            onCancelScheduledJob={onCancelScheduledJob}
-            onUpdateJobStatus={onUpdateJobStatus}
-          />
-        </div>
-      )}
     </AccordionSection>
   )
 }
